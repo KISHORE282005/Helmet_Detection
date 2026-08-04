@@ -53,6 +53,7 @@ class PersonTracker:
                 "bbox": [x1, y1, x2, y2],
                 "confidence": float(t[5]) if len(t) > 5 else (match["confidence"] if match else 0.0),
                 "has_helmet": match["has_helmet"] if match else False,
+                "helmet_analysis": match.get("helmet_analysis") if match else None,
                 "is_new_capture": track_id not in self.captured_ids,
             })
 

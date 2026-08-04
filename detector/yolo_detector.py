@@ -40,7 +40,9 @@ class YOLODetector:
     def detect(self, frame):
         persons = self._detect_persons(frame)
         for person in persons:
-            person["has_helmet"] = self._check_helmet(frame, person["bbox"])
+            analysis = self._check_helmet(frame, person["bbox"])
+            person["has_helmet"] = analysis["has_helmet"]
+            person["helmet_analysis"] = analysis
         return persons
 
     def _detect_persons(self, frame):
@@ -69,49 +71,157 @@ class YOLODetector:
             return self._check_helmet_model(frame, bbox)
         return self._check_helmet_heuristic(frame, bbox)
 
-    def _check_helmet_model(self, frame, bbox):
+    def _head_roi(self, frame, bbox):
         x1, y1, x2, y2 = bbox
-        head_y2 = y1 + int((y2 - y1) * 0.35)
-        head_x1 = max(0, x1 - int((x2 - x1) * 0.1))
-        head_x2 = min(frame.shape[1], x2 + int((x2 - x1) * 0.1))
-        head_y1 = max(0, y1 - int((y2 - y1) * 0.05))
-        head_y2 = min(frame.shape[0], head_y2)
+        h = y2 - y1
+        w = x2 - x1
+        top = max(0, y1 - int(0.02 * h))
+        bottom = min(frame.shape[0], y1 + int(0.38 * h))
+        left = max(0, x1 + int(0.10 * w))
+        right = min(frame.shape[1], x2 - int(0.10 * w))
+        if left >= right:
+            left, right = x1, x2
+        return frame[top:bottom, left:right], (top, bottom, left, right)
 
-        head_roi = frame[head_y1:head_y2, head_x1:head_x2]
-        if head_roi.size == 0:
-            return False
-
-        results = self.helmet_model(head_roi, conf=self.config.CONFIDENCE_THRESHOLD, verbose=False)
-        if len(results) > 0 and results[0].boxes is not None:
-            return len(results[0].boxes) > 0
-        return False
-
-    def _check_helmet_heuristic(self, frame, bbox):
+    def _validate_head(self, frame, bbox):
+        """Return (valid, reason, head_roi). Rejects heads that are too small,
+        cropped by the frame edge, blurred, occluded, or poorly lit so that a
+        single unreliable frame can never drive a violation decision."""
+        h, w = frame.shape[:2]
         x1, y1, x2, y2 = bbox
-        head_y2 = y1 + int((y2 - y1) * 0.30)
-        head_roi = frame[y1:head_y2, x1:x2]
-        if head_roi.size == 0:
-            return False
+        bh = y2 - y1
+        bw = x2 - x1
+        if bh <= 0 or bw <= 0:
+            return False, "empty person bbox", None
+
+        head_roi, (top, bottom, left, right) = self._head_roi(frame, bbox)
+        if head_roi.size == 0 or bottom <= top or right <= left:
+            return False, "no head region", None
+
+        hh = bottom - top
+        hw = right - left
+        if min(hh, hw) < self.config.MIN_HEAD_SIZE:
+            return False, f"head too small ({hh}x{hw}px)", head_roi
+
+        # Detect how much of the intended head region is clipped by the frame
+        # edge (the 10% side margins and 2% top offset are normal, not crops).
+        top_intended = y1 - int(0.02 * bh)
+        bottom_intended = y1 + int(0.38 * bh)
+        crop_top = max(0, -top_intended) / max(1, hh)
+        crop_bottom = max(0, bottom_intended - h) / max(1, hh)
+        crop_left = max(0, -left) / max(1, hw)
+        crop_right = max(0, right - w) / max(1, hw)
+        crop = max(crop_top, crop_bottom, crop_left, crop_right)
+        if crop > self.config.MAX_HEAD_EDGE_OVERLAP:
+            return False, "head partially outside frame", head_roi
+
+        gray = cv2.cvtColor(head_roi, cv2.COLOR_BGR2GRAY)
+        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+        if sharpness < self.config.MIN_HEAD_SHARPNESS:
+            return False, f"motion blur/out of focus (sharpness {sharpness:.0f})", head_roi
 
         hsv = cv2.cvtColor(head_roi, cv2.COLOR_BGR2HSV)
-        saturation = np.mean(hsv[:, :, 1])
-        value = np.mean(hsv[:, :, 2])
+        v = hsv[:, :, 2]
+        brightness = float(v.mean())
+        if brightness < self.config.MIN_HEAD_BRIGHTNESS:
+            return False, f"too dark (brightness {brightness:.0f})", head_roi
+        if brightness > self.config.MAX_HEAD_BRIGHTNESS:
+            return False, f"overexposed (brightness {brightness:.0f})", head_roi
+        contrast = float(v.std())
+        if contrast < self.config.MIN_HEAD_CONTRAST:
+            return False, f"severe occlusion/low contrast (std {contrast:.0f})", head_roi
 
-        lower_yellow = np.array([20, 80, 150])
-        upper_yellow = np.array([35, 255, 255])
-        lower_white = np.array([0, 0, 180])
-        upper_white = np.array([180, 40, 255])
-        lower_blue = np.array([100, 80, 80])
-        upper_blue = np.array([130, 255, 255])
-        lower_orange = np.array([5, 100, 150])
-        upper_orange = np.array([15, 255, 255])
+        return True, "ok", head_roi
 
-        mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-        mask_white = cv2.inRange(hsv, lower_white, upper_white)
-        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
-        mask_orange = cv2.inRange(hsv, lower_orange, upper_orange)
+    def _invalid_analysis(self, reason):
+        return {
+            "has_helmet": False, "confidence": 0.0,
+            "reason": f"head invalid: {reason}", "ratios": {},
+            "head_valid": False, "head_reason": reason,
+        }
 
-        combined_mask = mask_yellow | mask_white | mask_blue | mask_orange
-        helmet_pixel_ratio = np.sum(combined_mask > 0) / combined_mask.size
+    def _check_helmet_model(self, frame, bbox):
+        valid, reason, head_roi = self._validate_head(frame, bbox)
+        if not valid:
+            return self._invalid_analysis(reason)
 
-        return helmet_pixel_ratio > 0.15 or saturation > 50
+        results = self.helmet_model(head_roi, conf=self.config.CONFIDENCE_THRESHOLD, verbose=False)
+        if len(results) > 0 and results[0].boxes is not None and len(results[0].boxes) > 0:
+            confidence = float(results[0].boxes.conf.max())
+            return {
+                "has_helmet": True, "confidence": confidence,
+                "reason": f"helmet model confidence {confidence:.2f}", "ratios": {},
+                "head_valid": True, "head_reason": "ok",
+            }
+        return {
+            "has_helmet": False, "confidence": 0.0,
+            "reason": "helmet model found nothing", "ratios": {},
+            "head_valid": True, "head_reason": "ok",
+        }
+
+    def _skin_mask(self, hsv):
+        """True where pixels look like human skin. Skin is excluded from helmet
+        matching so a bare head (skin/hair/forehead) can never be misread as a
+        helmet, no matter how warm the lighting."""
+        skin = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        for lower, upper in self.config.SKIN_COLOR_RANGES:
+            skin = cv2.bitwise_or(
+                skin,
+                cv2.inRange(
+                    hsv,
+                    np.array(lower, dtype=np.uint8),
+                    np.array(upper, dtype=np.uint8),
+                ),
+            )
+        return skin
+
+    def _check_helmet_heuristic(self, frame, bbox):
+        valid, reason, head_roi = self._validate_head(frame, bbox)
+        if not valid:
+            return self._invalid_analysis(reason)
+
+        hh, hw = head_roi.shape[:2]
+        hsv = cv2.cvtColor(head_roi, cv2.COLOR_BGR2HSV)
+        skin = self._skin_mask(hsv)
+
+        # Match only the CROWN: the top half of the head region, central 60%
+        # of its width. That is where a helmet crown sits; the lower head and
+        # side fringes (hair, ears, forehead) are excluded.
+        cr_rows = max(1, int(hh * 0.5))
+        cl = max(0, int(hw * 0.2))
+        cr = max(cl + 1, int(hw * 0.8))
+        crown_hsv = hsv[:cr_rows, cl:cr]
+        crown_skin = skin[:cr_rows, cl:cr]
+        total = crown_hsv.shape[0] * crown_hsv.shape[1]
+
+        combined = np.zeros(crown_hsv.shape[:2], dtype=np.uint8)
+        ratios = {}
+        for name, lower, upper in self.config.HELMET_COLOR_RANGES:
+            mask = cv2.inRange(
+                crown_hsv,
+                np.array(lower, dtype=np.uint8),
+                np.array(upper, dtype=np.uint8),
+            )
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(crown_skin))
+            ratios[name] = float(np.count_nonzero(mask)) / total
+            combined = cv2.bitwise_or(combined, mask)
+
+        ratio = float(np.count_nonzero(combined)) / total
+
+        if ratio >= self.config.HELMET_MIN_RATIO:
+            has_helmet = True
+            confidence = min(0.99, 0.55 + ratio)
+            reason = f"helmet crown covers {ratio:.0%} of head"
+        else:
+            has_helmet = False
+            missing = max(0.0, self.config.HELMET_MIN_RATIO - ratio)
+            confidence = min(0.99, 0.80 + missing)
+            reason = f"no helmet (bare head, helmet color {ratio:.0%} of crown)"
+
+        return {
+            "has_helmet": has_helmet,
+            "confidence": confidence,
+            "reason": reason,
+            "ratios": ratios,
+            "head_valid": True, "head_reason": "ok",
+        }
