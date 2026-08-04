@@ -1,8 +1,9 @@
 import logging
-import sqlite3
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+
+from database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -11,31 +12,7 @@ class ReportGenerator:
     def __init__(self, config):
         self.config = config
         self.incidents = []
-        self.db_path = config.DATABASE_DIR / "violations.db"
-        self._init_database()
-
-    def _init_database(self):
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS violations (
-                incident_id TEXT PRIMARY KEY,
-                camera_name TEXT,
-                camera_id TEXT,
-                location TEXT,
-                video_name TEXT,
-                image_path TEXT,
-                timestamp TEXT,
-                date TEXT,
-                violation_type TEXT,
-                confidence REAL,
-                track_id INTEGER,
-                status TEXT DEFAULT 'Open'
-            )
-        """)
-        conn.commit()
-        conn.close()
-        logger.info(f"Database initialized at {self.db_path}")
+        self.db = DatabaseManager(config.DATABASE_DIR / "violations.db")
 
     def add_incident(self, incident):
         incident_id = f"INC{len(self.incidents) + 1:04d}"
@@ -46,11 +23,15 @@ class ReportGenerator:
             "location": incident.get("location", self.config.DEFAULT_LOCATION),
             "video_name": incident.get("video_name", "Unknown"),
             "image_path": incident.get("image_path", ""),
+            "poster_path": incident.get("poster_path", ""),
             "timestamp": incident.get("timestamp", datetime.now().strftime("%H:%M:%S")),
             "date": incident.get("date", datetime.now().strftime("%Y-%m-%d")),
             "violation_type": "Helmet Missing",
             "confidence": incident.get("confidence", 0.0),
             "track_id": incident.get("track_id", 0),
+            "scene_persons": incident.get("scene_persons", 0),
+            "scene_helmet": incident.get("scene_helmet", 0),
+            "scene_no_helmet": incident.get("scene_no_helmet", 0),
             "status": "Open",
         }
         self.incidents.append(record)
@@ -59,22 +40,7 @@ class ReportGenerator:
 
     def _save_to_database(self, record):
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO violations
-                (incident_id, camera_name, camera_id, location, video_name,
-                 image_path, timestamp, date, violation_type, confidence,
-                 track_id, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                record["incident_id"], record["camera_name"], record["camera_id"],
-                record["location"], record["video_name"], record["image_path"],
-                record["timestamp"], record["date"], record["violation_type"],
-                record["confidence"], record["track_id"], record["status"],
-            ))
-            conn.commit()
-            conn.close()
+            self.db.insert_violation(record)
         except Exception as e:
             logger.error(f"Database save failed: {e}")
 
@@ -86,14 +52,16 @@ class ReportGenerator:
         df = pd.DataFrame(self.incidents)
         columns = [
             "incident_id", "camera_name", "camera_id", "location",
-            "video_name", "image_path", "timestamp", "date",
+            "video_name", "image_path", "poster_path", "timestamp", "date",
             "violation_type", "confidence", "track_id", "status",
+            "scene_persons", "scene_helmet", "scene_no_helmet",
         ]
         df = df[columns]
         df.columns = [
             "Incident ID", "Camera Name", "Camera ID", "Location",
-            "Video Name", "Violation Image", "Timestamp", "Date",
+            "Video Name", "Violation Image", "Warning Poster", "Timestamp", "Date",
             "Violation Type", "Confidence Score", "Track ID", "Status",
+            "Persons in Frame", "With Helmet", "Without Helmet",
         ]
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

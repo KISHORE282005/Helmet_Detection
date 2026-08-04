@@ -8,6 +8,7 @@ from datetime import datetime
 
 import config as cfg
 from app import HelmetDetectionSystem
+from utils import extract_video_metadata
 
 logging.basicConfig(
     level=getattr(logging, cfg.LOG_LEVEL),
@@ -133,6 +134,26 @@ class HelmetDetectionGUI:
             self.file_label.config(text=f"{name} ({size:.1f} MB)")
             self.process_btn.config(state="normal")
             self._log(f"Selected: {name} ({size:.1f} MB)")
+            self._apply_metadata(path)
+
+    def _apply_metadata(self, path):
+        metadata = extract_video_metadata(path, cfg)
+        fields = {
+            "camera_name": (self.cam_name_entry, "Camera name"),
+            "camera_id": (self.cam_id_entry, "Camera ID"),
+            "location": (self.location_entry, "Location"),
+        }
+        found = []
+        for key, (entry, label) in fields.items():
+            value = metadata.get(key)
+            if value:
+                entry.delete(0, tk.END)
+                entry.insert(0, value)
+                found.append(f"{label}: {value}")
+        if found:
+            self._log(f"Auto-filled from video metadata -> " + " | ".join(found))
+        else:
+            self._log("No camera metadata found in video; using defaults.")
 
     def _log(self, message):
         self.log_text.config(state="normal")
