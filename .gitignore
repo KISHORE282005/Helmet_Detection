@@ -6,5 +6,4 @@ output/
 *.webp
 .env
 *.pyc
-models\yolo11x.pt
-models\yolo11n.pt
+models/*.pt
