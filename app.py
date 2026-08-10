@@ -50,9 +50,18 @@ class HelmetDetectionSystem:
         except Exception as exc:
             logger.warning(f"Could not apply RULE_MASTER overrides: {exc}")
 
-    def process_video(self, video_path, camera_name=None, camera_id=None, location=None, preview=False):
+    def process_video(self, video_path, camera_name=None, camera_id=None, location=None,
+                      preview=False, progress_callback=None, analysis_id="",
+                      should_stop=None, display_name=None):
+        """Analyze one video end to end.
+
+        progress_callback(dict) is invoked periodically with live counters so a
+        UI can render real progress; should_stop() lets a caller cancel the run.
+        display_name overrides the name recorded on incidents, so an upload
+        stored under a generated filename still reports the operator's original.
+        """
         cap, video_info = self.video_reader.open(video_path)
-        video_name = video_info["name"]
+        video_name = display_name or video_info["name"]
         total_frames = video_info["total_frames"]
         fps = video_info["fps"]
         self.video_fps = fps
@@ -90,8 +99,37 @@ class HelmetDetectionSystem:
         self.violation_tracker = ViolationTracker(self.config)
         self.confirmed_tracks = {}
         self.recent_groups = []
+        self.analysis_id = analysis_id
+        self.recorded_incidents = []
+        self.report_generator.incidents = []
+        unique_tracks = set()
+        cancelled = False
+
+        def emit_progress(done=False):
+            if not progress_callback:
+                return
+            elapsed_now = (datetime.now() - start_time).total_seconds()
+            progress_callback({
+                "frames_total": total_frames,
+                "frames_read": frame_count,
+                "frames_analyzed": processed_count,
+                "progress": (frame_count / total_frames) if total_frames else 0.0,
+                "people_detected": len(unique_tracks),
+                "person_frames": scene_persons_total,
+                "raw_detections": scene_no_helmet,
+                "compliant_frames": scene_helmet_ok,
+                "incidents": violation_count,
+                "processing_fps": (processed_count / elapsed_now) if elapsed_now > 0 else 0.0,
+                "elapsed_seconds": elapsed_now,
+                "done": done,
+            })
 
         while True:
+            if should_stop and should_stop():
+                cancelled = True
+                logger.info("Processing cancelled by caller")
+                break
+
             ret, frame = cap.read()
             if not ret:
                 break
@@ -122,6 +160,7 @@ class HelmetDetectionSystem:
             scene_persons_total += len(persons_info)
             scene_helmet_ok += sum(1 for p in persons_info if p["helmet_status"] == "helmet")
             scene_no_helmet += sum(1 for p in persons_info if p["helmet_status"] == "no")
+            unique_tracks.update(p["track_id"] for p in persons_info)
 
             if preview:
                 cv2.imshow("Helmet Detection Analysis", annotate_frame(frame, persons_info))
@@ -136,6 +175,9 @@ class HelmetDetectionSystem:
                     events, video_name, camera_name, camera_id, location,
                 )
                 violation_count += len(events)
+
+            if processed_count % 10 == 0:
+                emit_progress()
 
             if processed_count % 100 == 0:
                 progress = (frame_count / total_frames) * 100
@@ -157,6 +199,7 @@ class HelmetDetectionSystem:
 
         self.video_reader.release(cap)
         elapsed = (datetime.now() - start_time).total_seconds()
+        emit_progress(done=True)
 
         report_path = self.report_generator.generate_excel_report(video_name)
 
@@ -177,10 +220,24 @@ class HelmetDetectionSystem:
 
         return {
             "video_name": video_name,
+            "camera_name": camera_name,
+            "camera_id": camera_id,
+            "location": location,
             "total_frames": total_frames,
             "frames_processed": processed_count,
+            "video_fps": fps,
+            # `violations` counts confirmed incidents (one per tracked person),
+            # `raw_detections` counts every no-helmet person-frame. The gap
+            # between the two is what duplicate suppression removed.
             "violations": violation_count,
+            "raw_detections": scene_no_helmet,
+            "person_frames": scene_persons_total,
+            "compliant_frames": scene_helmet_ok,
+            "people_detected": len(unique_tracks),
+            "incidents": list(self.recorded_incidents),
             "elapsed_seconds": elapsed,
+            "processing_fps": (processed_count / elapsed) if elapsed > 0 else 0.0,
+            "cancelled": cancelled,
             "report_path": report_path,
         }
 
@@ -284,9 +341,13 @@ class HelmetDetectionSystem:
             "scene_helmet": with_helmet,
             "scene_no_helmet": no_helmet,
             "fps": getattr(self, "video_fps", 0),
+            "analysis_id": getattr(self, "analysis_id", ""),
+            "confirm_frames": int(getattr(self.config, "VIOLATION_REQUIRED_FRAMES", 0)),
         }
 
-        self.report_generator.add_incident(incident)
+        record = self.report_generator.add_incident(incident)
+        if record:
+            self.recorded_incidents.append(record)
         self.notifier.notify(incident, cand.frame)
         self.tracker.mark_captured(track_id)
         self.confirmed_tracks[track_id] = {

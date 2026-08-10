@@ -15,7 +15,10 @@ class ReportGenerator:
         self.db = DatabaseManager(config.DATABASE_DIR / "violations.db")
 
     def add_incident(self, incident):
-        incident_id = f"INC{len(self.incidents) + 1:04d}"
+        # IDs come from the database, not from len(self.incidents): a per-run
+        # counter would restart at INC0001 every analysis and the INSERT OR
+        # REPLACE would silently overwrite earlier incidents.
+        incident_id = self.db.next_incident_id()
         record = {
             "incident_id": incident_id,
             "camera_name": incident.get("camera_name", self.config.DEFAULT_CAMERA_NAME),
@@ -33,10 +36,16 @@ class ReportGenerator:
             "scene_helmet": incident.get("scene_helmet", 0),
             "scene_no_helmet": incident.get("scene_no_helmet", 0),
             "status": "Open",
+            "detected_at": incident.get(
+                "detected_at", datetime.now().isoformat(timespec="seconds")
+            ),
+            "analysis_id": incident.get("analysis_id", ""),
+            "confirm_frames": incident.get("confirm_frames", 0),
         }
         self.incidents.append(record)
         self._save_to_database(record)
         logger.info(f"Incident {incident_id} recorded for Track ID {record['track_id']}")
+        return record
 
     def _save_to_database(self, record):
         try:

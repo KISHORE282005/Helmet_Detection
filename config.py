@@ -41,6 +41,12 @@ def _apply_env_overrides(env):
             logging.getLogger(__name__).warning(f"Unknown .env key ignored: {key}")
             continue
         current = getattr(module, key)
+        # A blank value, or a literal "None"/"null", means "leave the default
+        # alone". Without this, DEFAULT_CAMERA_NAME=None would set the *string*
+        # "None" — which is truthy, so incidents would be filed against a camera
+        # literally named None.
+        if raw.strip().lower() in ("", "none", "null") and not isinstance(current, bool):
+            continue
         try:
             if isinstance(current, bool):
                 setattr(module, key, raw.lower() in ("1", "true", "yes", "on"))
@@ -153,9 +159,9 @@ DEFAULT_SUPERVISOR_ID = ""
 # image showing all of them together (in addition to single-person captures).
 GROUP_CAPTURE_ENABLED = True
 
-DEFAULT_CAMERA_NAME = "Assembly Line 01"
-DEFAULT_CAMERA_ID = "CAM001"
-DEFAULT_LOCATION = "Production Area A"
+DEFAULT_CAMERA_NAME = "None"
+DEFAULT_CAMERA_ID = "None"
+DEFAULT_LOCATION = "None"
 
 # ---------------------------------------------------------------------------
 # Filename-based camera info (fallback when the video has no embedded metadata)
@@ -204,8 +210,72 @@ SKIN_COLOR_RANGES = [
     ([0, 25, 20], [22, 175, 80]),    # darker skin tones
 ]
 
+# ---------------------------------------------------------------------------
+# SafeVision AI API server
+# ---------------------------------------------------------------------------
+# Bind address for `python -m api`. Use 0.0.0.0 to expose the dashboard to
+# other machines on the plant network; 127.0.0.1 keeps it local to this host.
+API_HOST = "127.0.0.1"
+API_PORT = 8000
+API_RELOAD = False
+# Comma-separated browser origins allowed to call the API. Only needed for the
+# Vite dev server; the production build is served by this same process.
+API_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+# Largest video accepted by the upload endpoint.
+API_MAX_UPLOAD_MB = 2048
+
+# ---------------------------------------------------------------------------
+# Camera network / RTSP
+# ---------------------------------------------------------------------------
+# How often the dashboard re-checks whether each camera answers on its RTSP
+# port, and how long to wait for that answer.
+CAMERA_POLL_INTERVAL = 20.0
+CAMERA_CONNECT_TIMEOUT = 1.5
+
+# RTSP credentials. These stay on the server: they are never written to the
+# database, never returned by the API, and never reach the browser. Leave the
+# username blank for cameras that allow anonymous streaming.
+RTSP_USERNAME = ""
+RTSP_PASSWORD = ""
+RTSP_DEFAULT_PORT = 554
+# Hikvision stream path. {channel} is replaced with the camera's channel value
+# (101 = channel 1 main stream, 102 = channel 1 sub stream).
+RTSP_STREAM_PATH = "/Streaming/Channels/{channel}"
+RTSP_DEFAULT_CHANNEL = "101"
+
+# ---------------------------------------------------------------------------
+# Primary camera provisioning
+# ---------------------------------------------------------------------------
+# Set CAMERA_IP in .env to register your camera automatically on startup. The
+# record is created if missing and its address is kept in step on every boot,
+# so a camera can be brought online by editing one line. Leave CAMERA_IP blank
+# to manage cameras entirely from the dashboard instead.
+CAMERA_IP = ""
+CAMERA_ID = "CAM001"
+CAMERA_NAME = "Assembly Line 1"
+CAMERA_LOCATION = "Production Area A"
+CAMERA_DEPARTMENT = "Assembly"
+CAMERA_CHANNEL = "101"
+CAMERA_TARGET_FPS = 10
+CAMERA_SUPERVISOR_ID = ""
+
 LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+
+def rtsp_url(ip_address, port=None, channel=None):
+    """Build the full RTSP URL for a camera. SERVER-SIDE ONLY.
+
+    The result embeds credentials, so it must never be returned by the API,
+    logged, or sent to the browser. Use it only to open a stream.
+    """
+    if not ip_address:
+        return None
+    credentials = ""
+    if RTSP_USERNAME:
+        credentials = f"{RTSP_USERNAME}:{RTSP_PASSWORD}@" if RTSP_PASSWORD else f"{RTSP_USERNAME}@"
+    path = RTSP_STREAM_PATH.format(channel=channel or RTSP_DEFAULT_CHANNEL)
+    return f"rtsp://{credentials}{ip_address}:{port or RTSP_DEFAULT_PORT}{path}"
 
 # Apply .env overrides last so any setting above can be changed via .env.
 _apply_env_overrides(_ENV)
