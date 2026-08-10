@@ -8,3 +8,5 @@ output/
 *.pyc
 models/*.pt
 node_modules/
+*.exe
+*cfg
