@@ -10,3 +10,4 @@ models/*.pt
 node_modules/
 *.exe
 *cfg
+.venv/
