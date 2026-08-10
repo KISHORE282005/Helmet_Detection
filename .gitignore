@@ -7,3 +7,4 @@ output/
 .env
 *.pyc
 models/*.pt
+node_modules/

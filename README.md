@@ -1,6 +1,13 @@
-# AI-Based Helmet Detection and Automated Safety Violation Reporting System
+# SafeVision AI — Industrial PPE Safety Monitoring
+
+**AI-Based Helmet Detection and Automated Safety Violation Reporting System**
 
 A Proof-of-Concept system that analyzes CCTV footage to detect workers without safety helmets, captures evidence images, and generates automated violation reports.
+
+It ships in two parts:
+
+- **The detection pipeline** — YOLO11 + ByteTrack, driven from the CLI, the tkinter GUI, or the API.
+- **SafeVision AI** — a web operations dashboard (FastAPI + React) for supervisors: live camera state, the violation review queue, evidence, reports and analytics.
 
 ## System Architecture
 
@@ -61,6 +68,92 @@ python app.py -i
 python app.py videos/Shift_A.mp4
 ```
 
+## SafeVision AI Dashboard
+
+The web dashboard is the supervisor-facing interface. It runs on the same
+database and output folders as the CLI, so anything analyzed from the terminal
+shows up in the dashboard immediately.
+
+### Run it
+
+```powershell
+# One-time: build the front end
+cd frontend
+npm install
+npm run build
+cd ..
+
+# Start the server — serves both the API and the built dashboard
+python -m api
+```
+
+Open **http://127.0.0.1:8000**.
+
+For front-end development, run the API and the Vite dev server side by side:
+
+```powershell
+python -m api --reload          # terminal 1  → http://127.0.0.1:8000
+cd frontend && npm run dev      # terminal 2  → http://localhost:5173
+```
+
+Interactive API documentation is at `http://127.0.0.1:8000/docs`.
+
+### What the dashboard does
+
+| Page | Purpose |
+|---|---|
+| **Dashboard** | Cameras online, open violations, today vs yesterday, compliance rate, camera wall, 7-day trend, review queue, system health |
+| **Live Cameras / Camera Grid** | Per-camera connection state and the most recent AI evidence; 4 columns on desktop, 2 on laptop, 1 on tablet |
+| **Video Analysis** | Upload recorded CCTV footage and watch the real pipeline counters — frames, people tracked, raw detections, unique incidents, processing FPS |
+| **Active Violations** | The supervisor work queue: every incident awaiting a decision |
+| **Incident History** | Searchable, filterable table (camera, location, status, date range, confidence) with paging |
+| **Incident Review** | Evidence frame and warning poster, full incident facts, the detection→violation→incident→evidence chain, and Confirm / False Positive / Resolved actions |
+| **Evidence Gallery** | Visual triage across incidents with a detail modal |
+| **Reports** | Daily / weekly / monthly summaries, exportable to Excel, PDF and CSV |
+| **Analytics** | Violation trend, violations per camera and per location, hour-of-day distribution, duplicate-suppression ratio, recent runs |
+| **Cameras** | Camera registry, location and supervisor mapping, AI enable/disable, connection test |
+| **AI Models** | Model inventory, engine state, and the Phase 2 recognition roadmap |
+| **Settings** | Detection, tracking and incident thresholds, applied to the next analysis run |
+
+### Detection vs violation vs incident
+
+The dashboard keeps these separate everywhere, because the difference is the
+whole point of the tracker:
+
+| Term | Meaning |
+|---|---|
+| **Detection** | A person found in one analyzed frame |
+| **Violation** | A tracked person reading as helmet-missing |
+| **Incident** | **One** record per tracked person, after temporal confirmation |
+| **Evidence** | The best frame of that confirmed run |
+
+One worker without a helmet across 500 frames produces **one incident**, not 500.
+The Video Analysis and Analytics pages report raw detections and unique
+incidents side by side so the suppression is visible rather than assumed.
+
+### Reported numbers are real
+
+Nothing on the dashboard is simulated. Where the backend has no data, the UI
+shows an em dash and says why — an empty system has no compliance rate, and
+showing 100% would be false. Specifically:
+
+- **Cameras online** counts cameras whose RTSP port accepted a TCP connection.
+  Phase 1 does not decode the stream, and the UI says so rather than implying
+  live video.
+- **Compliance rate** is tracked people minus confirmed violators, over tracked
+  people, from completed analysis runs. It is `—` until footage is analyzed.
+- **Analysis progress** comes from the running pipeline via a progress callback.
+
+### Security
+
+- RTSP usernames and passwords are never stored, transmitted to the browser, or
+  displayed. Cameras expose only an IP, a port, and a connection state.
+- Evidence, poster and report files are served through `/api/media/{kind}/{name}`,
+  which resolves paths inside a fixed allow-list of output directories and
+  rejects anything that escapes them.
+- Absolute server filesystem paths are stripped from API responses.
+- SMTP credentials live in `.env` and are never exposed by the API.
+
 ## GUI Usage
 
 1. Click **Upload Video** — select a CCTV video file
@@ -103,6 +196,19 @@ Helmet_Detection/
 ├── gui.py               GUI entry point (tkinter)
 ├── config.py            All configuration settings
 ├── requirements.txt     Python dependencies
+├── api/                 FastAPI backend for the dashboard
+│   ├── main.py          App factory, CORS, SPA hosting
+│   ├── __main__.py      `python -m api`
+│   ├── state.py         Shared DB / config / model singletons, media path guard
+│   ├── schemas.py       Request bodies and row → API serializers
+│   ├── routers/         dashboard, incidents, cameras, analysis,
+│   │                    analytics, reports, settings, system, media
+│   └── services/        Background analysis jobs, camera reachability polling
+├── frontend/            React + TypeScript + Tailwind dashboard
+│   ├── src/lib/         API client, hooks, types, formatting
+│   ├── src/components/  UI primitives, charts, layout, domain components
+│   ├── src/pages/       One file per route
+│   └── dist/            Production build (served by FastAPI)
 ├── models/              YOLO model files (*.pt)
 │   └── yolo11n.pt       Pre-trained person detector (auto-downloaded)
 ├── videos/              Place CCTV videos here
@@ -243,11 +349,33 @@ All violations stored in `database/violations.db` for querying and analytics.
 - Invalid head frames (blur, crop, poor light, occlusion) are ignored and don't drive decisions
 - When a person leaves and reappears, they get a new track ID
 
+## Database
+
+`database/violations.db` (SQLite) holds:
+
+| Table | Contents |
+|---|---|
+| `violations` | One row per confirmed incident — the dashboard's incident history |
+| `analysis_runs` | Per-run totals (frames, people tracked, raw detections, incidents) — the denominators behind compliance rate |
+| `camera_master` | Camera registry, location, IP, port, AI flag, connection state |
+| `supervisor_master` | Supervisors and their alert email addresses |
+| `rule_master` | Configurable thresholds applied over `config.py` |
+| `violation_history`, `email_log` | Notification audit trail |
+
+Schema changes are applied automatically on startup by the migration step in
+`database/db_manager.py`, so an existing database is upgraded in place.
+
+For production, point the same schema at PostgreSQL.
+
 ## Future Phases
 
-- **Phase 2:** Live RTSP/IP camera streams, multi-camera support
-- **Phase 3:** Face recognition (InsightFace), email/SMS alerts
-- **Phase 4:** Analytics dashboard, additional PPE detection (vests, gloves, goggles, shoes)
+- **Phase 2:** Live RTSP/IP camera streams with decoding, multi-camera support, employee recognition (InsightFace — RetinaFace detection + ArcFace embedding)
+- **Phase 3:** Microsoft Teams and SMS notification channels alongside email
+- **Phase 4:** Additional PPE detection (vests, gloves, goggles, shoes)
+
+The dashboard already models both phases: the AI Models page shows the Phase 2
+recognition stack as planned-but-disabled, and camera panels switch from
+"recorded input" to live streaming without a redesign.
 
 ## License
 
