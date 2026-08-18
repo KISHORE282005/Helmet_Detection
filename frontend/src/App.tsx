@@ -11,6 +11,7 @@ import Evidence from './pages/Evidence';
 import VideoAnalysis from './pages/VideoAnalysis';
 import Reports from './pages/Reports';
 import Analytics from './pages/Analytics';
+import NVAAnalysis from './pages/NVAAnalysis';
 import CameraManagement from './pages/CameraManagement';
 import AIModels from './pages/AIModels';
 import Settings from './pages/Settings';
@@ -31,6 +32,7 @@ export default function App() {
 
         <Route path="/reports" element={<Reports />} />
         <Route path="/analytics" element={<Analytics />} />
+        <Route path="/nva" element={<NVAAnalysis />} />
 
         <Route path="/cameras" element={<CameraManagement />} />
         <Route path="/models" element={<AIModels />} />

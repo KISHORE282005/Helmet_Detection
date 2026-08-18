@@ -20,6 +20,9 @@ import type {
   IncidentStatus,
   ModelsResponse,
   NotificationFeed,
+  NvaCatalogResponse,
+  NvaSegmentPage,
+  NvaSummary,
   SafetyReport,
   SettingsResponse,
   SystemHealth,
@@ -144,6 +147,50 @@ export function useAnalytics(range: string, custom?: { from: string; to: string 
         date_to: custom?.to,
       }),
     refetchInterval: REFRESH.slow,
+  });
+}
+
+export type NvaQuery = {
+  range?: string;
+  date_from?: string;
+  date_to?: string;
+  camera_id?: string;
+  location?: string;
+};
+
+export function useNva(query: NvaQuery) {
+  return useQuery({
+    queryKey: ['nva', query],
+    queryFn: () => api.get<NvaSummary>('/api/nva', query),
+    refetchInterval: REFRESH.slow,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** The activity reference: which activities count as NVA, and by what rule.
+ *  Definitions, so it is fetched once and cached for the session. */
+export function useNvaCatalog() {
+  return useQuery({
+    queryKey: ['nva-catalog'],
+    queryFn: () => api.get<NvaCatalogResponse>('/api/nva/catalog'),
+    staleTime: Infinity,
+  });
+}
+
+export function useNvaActivities(
+  query: NvaQuery & {
+    activity?: string;
+    value_class?: 'VA' | 'NNVA' | 'NVA';
+    run_id?: string;
+    min_duration?: number;
+    limit?: number;
+    offset?: number;
+  },
+) {
+  return useQuery({
+    queryKey: ['nva-activities', query],
+    queryFn: () => api.get<NvaSegmentPage>('/api/nva/activities', query),
+    placeholderData: (previous) => previous,
   });
 }
 

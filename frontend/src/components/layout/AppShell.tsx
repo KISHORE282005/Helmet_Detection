@@ -1,45 +1,24 @@
 /** Fixed sidebar + header frame. Only the content column scrolls, so the
  *  header and system status stay visible on a wall-mounted monitor. */
 
-import { useEffect, useState, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { type ReactNode } from 'react';
 import { useDashboard } from '../../lib/hooks';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { cx } from '../ui/primitives';
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const [navOpen, setNavOpen] = useState(false);
   const dashboard = useDashboard();
-  const location = useLocation();
-
-  // The mobile drawer must not survive a route change.
-  useEffect(() => setNavOpen(false), [location.pathname]);
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-plane">
       <Sidebar
         openViolations={dashboard.data?.active_violations.count ?? 0}
-        className="hidden lg:flex"
+        className="flex"
       />
 
-      {navOpen && (
-        <div className="fixed inset-0 z-50 flex lg:hidden">
-          <div
-            className="absolute inset-0 bg-black/70"
-            onClick={() => setNavOpen(false)}
-            role="presentation"
-          />
-          <Sidebar
-            openViolations={dashboard.data?.active_violations.count ?? 0}
-            onNavigate={() => setNavOpen(false)}
-            className="relative z-10"
-          />
-        </div>
-      )}
-
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onOpenNav={() => setNavOpen(true)} />
+        <TopBar />
         <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           <div className="mx-auto w-full max-w-[1800px] p-4 lg:p-5">{children}</div>
         </main>

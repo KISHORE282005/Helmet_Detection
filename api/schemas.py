@@ -62,6 +62,14 @@ class SettingsPayload(BaseModel):
     GROUP_CAPTURE_ENABLED: Optional[bool] = None
     EMAIL_ENABLED: Optional[bool] = None
     HELMET_MIN_RATIO: Optional[float] = Field(None, ge=0.0, le=1.0)
+    # NVA analysis. Speeds are in body-heights per second, so the bounds are
+    # generous: 2.0 is a run, 0.01 is indistinguishable from standing still.
+    NVA_ENABLED: Optional[bool] = None
+    NVA_IDLE_SPEED: Optional[float] = Field(None, ge=0.01, le=1.0)
+    NVA_WALK_SPEED: Optional[float] = Field(None, ge=0.05, le=2.0)
+    NVA_IDLE_MIN_SECONDS: Optional[float] = Field(None, ge=1.0, le=300.0)
+    NVA_MIN_SEGMENT_SECONDS: Optional[float] = Field(None, ge=1.0, le=120.0)
+    NVA_TARGET_VA_RATIO: Optional[float] = Field(None, ge=0.0, le=100.0)
 
 
 # ---------------------------------------------------------------------------

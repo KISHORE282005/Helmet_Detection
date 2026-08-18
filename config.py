@@ -1,7 +1,9 @@
 import os
+import re
 import sys
 import logging
 from pathlib import Path
+from urllib.parse import quote
 
 BASE_DIR = Path(__file__).parent
 
@@ -211,6 +213,73 @@ SKIN_COLOR_RANGES = [
 ]
 
 # ---------------------------------------------------------------------------
+# NVA (Non-Value-Added) activity analysis
+# ---------------------------------------------------------------------------
+# Classifies what each tracked person is doing from their trajectory, charges
+# that time to Value-Added / Necessary-NVA / NVA, and recommends the lean
+# countermeasure for the biggest waste. Runs on the tracks the safety pipeline
+# already produces, so it costs no extra inference.
+#
+# All distance thresholds are in BODY-HEIGHTS (the person's own bounding-box
+# height), never pixels — that is what makes one setting correct for someone
+# standing next to the camera and someone at the far end of the bay.
+NVA_ENABLED = True
+# Rolling trajectory window each decision is made over. Shorter reacts faster
+# and reads noisier; longer is calmer but blurs short activities together.
+NVA_WINDOW_SECONDS = 4.0
+# The window is averaged into waypoints this far apart before distances are
+# measured. This is what stops bounding-box jitter accumulating into a
+# walking speed for a person who never moved.
+NVA_SAMPLE_SECONDS = 0.5
+# A label must win a majority of this much history before it can open a
+# segment, so one occluded frame cannot invent an activity.
+NVA_SMOOTHING_SECONDS = 1.5
+# Below this speed (body-heights/second) a person counts as stationary.
+NVA_IDLE_SPEED = 0.08
+# At or above this speed they are travelling rather than working in place.
+NVA_WALK_SPEED = 0.35
+# ...or when they end up this far from where the window started.
+NVA_TRAVEL_NET = 1.20
+# Travel whose net displacement is below this fraction of the distance walked
+# is wandering, not going somewhere: searching rather than walking.
+NVA_SEARCH_STRAIGHTNESS = 0.50
+# Repeated back-and-forth trips. This is a longer-horizon pattern than the
+# others — whether a single round trip falls inside a 4-second window is a
+# matter of timing — so it is judged over its own, longer history. A shuttle
+# must reverse direction this many times, cover this much ground doing it, and
+# end up near where it started: all three, so someone who turns around once on
+# a normal walk is never recorded as waste.
+NVA_SHUTTLE_WINDOW_SECONDS = 12.0
+NVA_SHUTTLE_REVERSALS = 3
+NVA_SHUTTLE_MIN_PATH = 4.0
+NVA_SHUTTLE_STRAIGHTNESS = 0.35
+# Smallest movement (body-heights) that counts as a direction rather than noise.
+NVA_REVERSAL_MIN_STEP = 0.25
+# Stationary people within this many body-heights of each other are a group
+# huddle rather than separate idle individuals (~2.6 m for a 1.75 m person).
+NVA_GROUP_PROXIMITY = 1.5
+NVA_GROUP_MIN_PEOPLE = 2
+# Shortest run of an activity worth recording. A brief pause is work rhythm,
+# not waiting, so short runs are never charged to waste.
+NVA_MIN_SEGMENT_SECONDS = 3.0
+NVA_IDLE_MIN_SECONDS = 8.0
+# A track needs this much history before it is classified at all.
+NVA_MIN_TRACK_SECONDS = 2.0
+# A person out of view longer than this breaks trajectory continuity: the open
+# segment is closed rather than bridged across the gap.
+NVA_GAP_RESET_SECONDS = 3.0
+
+# Recommendation engine. An activity below the minimum share produces no
+# recommendation — a handful of stray seconds must never become a work order.
+NVA_RECOMMEND_MIN_SHARE = 2.0
+NVA_SEVERITY_MEDIUM_SHARE = 7.0
+NVA_SEVERITY_HIGH_SHARE = 15.0
+# Walking is necessary, so it is only raised once it is disproportionate.
+NVA_WALKING_ALERT_SHARE = 20.0
+# Value-added ratio the line is being held to, in percent.
+NVA_TARGET_VA_RATIO = 60.0
+
+# ---------------------------------------------------------------------------
 # SafeVision AI API server
 # ---------------------------------------------------------------------------
 # Bind address for `python -m api`. Use 0.0.0.0 to expose the dashboard to
@@ -243,6 +312,39 @@ RTSP_DEFAULT_PORT = 554
 RTSP_STREAM_PATH = "/Streaming/Channels/{channel}"
 RTSP_DEFAULT_CHANNEL = "101"
 
+# FFmpeg transport for the stream. TCP is strongly preferred on Hikvision:
+# over UDP a busy plant network drops packets and the decoder hands back torn
+# frames, which the detector then scores as real content.
+RTSP_TRANSPORT = "tcp"
+# How long to wait for the camera to answer the initial handshake, and for any
+# later read, before treating the link as dead. Without these OpenCV waits a
+# fixed 30s, so an unreachable camera blocks a snapshot request for half a
+# minute before reporting the obvious.
+RTSP_OPEN_TIMEOUT_MS = 8000
+RTSP_READ_TIMEOUT_MS = 8000
+# Frames the capture may queue. Live analysis wants the newest frame, not a
+# backlog: a deeper buffer makes the pipeline report violations that are
+# already several seconds old.
+RTSP_BUFFER_SIZE = 1
+# A live stream that stops delivering frames is usually a network blip, not
+# the end of the footage, so reopen it this many times before ending the run.
+# 0 disables reconnection.
+RTSP_RECONNECT_ATTEMPTS = 5
+RTSP_RECONNECT_DELAY = 3.0
+# Used when the camera reports no frame rate. Timestamps on incidents are
+# derived from FPS, so this must never be left at zero.
+RTSP_FALLBACK_FPS = 15.0
+
+# ---------------------------------------------------------------------------
+# Live analysis
+# ---------------------------------------------------------------------------
+# Stop a live session automatically after this many seconds. 0 = run until the
+# operator stops it.
+LIVE_MAX_DURATION_SECONDS = 0
+# Live sessions allowed to run at once. Each one loads its own copy of the
+# detection models, so raising this costs both memory and throughput.
+LIVE_MAX_SESSIONS = 1
+
 # ---------------------------------------------------------------------------
 # Primary camera provisioning
 # ---------------------------------------------------------------------------
@@ -263,19 +365,73 @@ LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
-def rtsp_url(ip_address, port=None, channel=None):
+def rtsp_url(ip_address, port=None, channel=None, username=None, password=None):
     """Build the full RTSP URL for a camera. SERVER-SIDE ONLY.
 
     The result embeds credentials, so it must never be returned by the API,
-    logged, or sent to the browser. Use it only to open a stream.
+    logged, or sent to the browser — pass it through `redact_rtsp_url` first.
+    Use it only to open a stream.
     """
     if not ip_address:
         return None
+
+    ip_address = str(ip_address).strip()
+    # An operator may paste a complete URL into the address field. Honour it
+    # verbatim so cameras with a non-Hikvision path still work.
+    if "://" in ip_address:
+        return ip_address
+
+    user = RTSP_USERNAME if username is None else username
+    secret = RTSP_PASSWORD if password is None else password
+
     credentials = ""
-    if RTSP_USERNAME:
-        credentials = f"{RTSP_USERNAME}:{RTSP_PASSWORD}@" if RTSP_PASSWORD else f"{RTSP_USERNAME}@"
-    path = RTSP_STREAM_PATH.format(channel=channel or RTSP_DEFAULT_CHANNEL)
-    return f"rtsp://{credentials}{ip_address}:{port or RTSP_DEFAULT_PORT}{path}"
+    if user:
+        # Camera passwords routinely contain @ : / #. Unquoted, those are
+        # parsed as URL structure and authentication fails with a misleading
+        # "could not open stream" rather than a 401.
+        credentials = quote(str(user), safe="")
+        if secret:
+            credentials += ":" + quote(str(secret), safe="")
+        credentials += "@"
+
+    path = RTSP_STREAM_PATH.format(channel=str(channel or RTSP_DEFAULT_CHANNEL))
+    if path and not path.startswith("/"):
+        path = "/" + path
+    return f"rtsp://{credentials}{ip_address}:{int(port or RTSP_DEFAULT_PORT)}{path}"
+
+
+def rtsp_url_for_camera(camera):
+    """Build the stream URL from a camera_master row. SERVER-SIDE ONLY.
+
+    Credentials come from .env rather than the row, because the database
+    deliberately never stores them.
+    """
+    if not camera:
+        return None
+    return rtsp_url(
+        camera.get("ip_address"),
+        port=camera.get("rtsp_port"),
+        channel=camera.get("rtsp_channel"),
+    )
+
+
+# Matches the credential segment of any URL: scheme, then everything up to the
+# '@' that precedes the host. Anchoring on the scheme means a stray '@' later
+# in a sentence or query string is left alone.
+_URL_CREDENTIALS = re.compile(r"(?P<scheme>[a-zA-Z][\w+.\-]*://)[^/\s@]*@")
+
+
+def redact_rtsp_url(text):
+    """Replace embedded URL credentials with `***`.
+
+    Accepts a bare URL or any string containing one, because exception
+    messages from OpenCV routinely quote back the URL they were handed. Every
+    log line, error message and API response that mentions a stream must go
+    through this — an unredacted RTSP URL is a password in plain text.
+    """
+    if not text:
+        return ""
+    return _URL_CREDENTIALS.sub(lambda m: f"{m.group('scheme')}***@", str(text))
 
 # Apply .env overrides last so any setting above can be changed via .env.
 _apply_env_overrides(_ENV)

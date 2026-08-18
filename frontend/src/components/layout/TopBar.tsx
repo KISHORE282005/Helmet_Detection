@@ -16,7 +16,7 @@ function useClock() {
   return now;
 }
 
-export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
+export function TopBar() {
   const now = useClock();
   const health = useHealth();
   const notifications = useNotifications();
@@ -40,8 +40,7 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
       <Button
         variant="ghost"
         size="sm"
-        className="lg:hidden"
-        onClick={onOpenNav}
+        className="hidden"
         aria-label="Open navigation"
       >
         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.7">

@@ -270,6 +270,9 @@ class AnalysisManager:
             "report_available": bool(result.get("report_path")),
             "report_name": Path(result["report_path"]).name if result.get("report_path") else None,
             "frame_skip": int(getattr(cfg, "FRAME_SKIP", 1)),
+            # Value-stream result for this run, with its recommendations.
+            "nva": result.get("nva"),
+            "nva_run_id": result.get("nva_run_id"),
         }
         self._persist_run(job)
         logger.info(
@@ -281,6 +284,7 @@ class AnalysisManager:
     @staticmethod
     def _persist_run(job):
         """Store run totals so compliance rate survives a restart."""
+        nva = job.result.get("nva") or {}
         try:
             get_db().save_analysis_run({
                 "run_id": job.job_id,
@@ -302,6 +306,11 @@ class AnalysisManager:
                 "elapsed_seconds": job.result["elapsed_seconds"],
                 "processing_fps": job.result["processing_fps"],
                 "status": job.status,
+                "observed_seconds": nva.get("observed_seconds", 0.0),
+                "classified_seconds": nva.get("classified_seconds", 0.0),
+                "va_seconds": nva.get("va_seconds", 0.0),
+                "nnva_seconds": nva.get("nnva_seconds", 0.0),
+                "nva_seconds": nva.get("nva_seconds", 0.0),
             })
         except Exception:
             logger.exception(f"Could not persist analysis run {job.job_id}")

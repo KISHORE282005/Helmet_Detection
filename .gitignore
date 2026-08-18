@@ -10,4 +10,7 @@ models/*.pt
 node_modules/
 *.exe
 *cfg
-.venv/
+venv/
+*.whl
+*.zip
+*.md

@@ -1,7 +1,10 @@
 import cv2
 import logging
 import argparse
+import signal
 import sys
+import time
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -11,8 +14,9 @@ from tracker import PersonTracker
 from report import ReportGenerator
 from database import DatabaseManager, RuleManager
 from notification import NotificationManager
+from nva import ActivityTracker, build_recommendations, summarize
 from utils import VideoReader, save_violation_image, annotate_frame, generate_warning_poster
-from utils import ViolationTracker, extract_video_metadata
+from utils import ViolationTracker, extract_video_metadata, is_stream_source
 
 logging.basicConfig(
     level=getattr(logging, cfg.LOG_LEVEL),
@@ -55,18 +59,26 @@ class HelmetDetectionSystem:
                       should_stop=None, display_name=None):
         """Analyze one video end to end.
 
+        `video_path` is either a file on disk or a live camera URL
+        (rtsp://...); the only differences are that a stream has no frame
+        count, is timestamped against the wall clock, and is reopened rather
+        than abandoned when a read fails.
+
         progress_callback(dict) is invoked periodically with live counters so a
         UI can render real progress; should_stop() lets a caller cancel the run.
         display_name overrides the name recorded on incidents, so an upload
         stored under a generated filename still reports the operator's original.
         """
         cap, video_info = self.video_reader.open(video_path)
+        is_stream = bool(video_info.get("is_stream"))
         video_name = display_name or video_info["name"]
         total_frames = video_info["total_frames"]
         fps = video_info["fps"]
         self.video_fps = fps
 
-        if not (camera_name and camera_id and location):
+        # A stream has no filename to parse, and its camera details are always
+        # supplied by the caller from the camera record.
+        if not is_stream and not (camera_name and camera_id and location):
             metadata = extract_video_metadata(video_path, self.config)
         else:
             metadata = {}
@@ -85,7 +97,10 @@ class HelmetDetectionSystem:
         logger.info("=" * 60)
         logger.info(f"Processing started: {video_name}")
         logger.info(f"Camera: {camera_name} ({camera_id}) - {location}")
-        logger.info(f"Total frames: {total_frames} | FPS: {fps:.2f}")
+        if is_stream:
+            logger.info(f"Source: LIVE STREAM {video_info['path']} | FPS: {fps:.2f}")
+        else:
+            logger.info(f"Total frames: {total_frames} | FPS: {fps:.2f}")
         logger.info(
             f"Frame skip: {self.config.FRAME_SKIP} | Person conf: {self.config.CONFIDENCE_THRESHOLD} | "
             f"Helmet conf: {self.config.HELMET_CONFIDENCE_THRESHOLD}"
@@ -97,19 +112,30 @@ class HelmetDetectionSystem:
         logger.info("=" * 60)
 
         self.violation_tracker = ViolationTracker(self.config)
+        # Same tracks, second question: not "is this person safe" but "is this
+        # person adding value". Runs off the existing trajectories, so it adds
+        # arithmetic rather than another model.
+        self.activity_tracker = ActivityTracker(self.config)
         self.confirmed_tracks = {}
         self.recent_groups = []
         self.analysis_id = analysis_id
+        # A CLI run has no job id, but its activity segments still need to be
+        # grouped, so give it one rather than filing them under "".
+        nva_run_id = analysis_id or f"cli-{uuid.uuid4().hex[:8]}"
         self.recorded_incidents = []
         self.report_generator.incidents = []
+        self.report_generator.nva_segments = []
+        self.report_generator.nva_breakdown = None
         unique_tracks = set()
         cancelled = False
+        position_seconds = 0.0
 
         def emit_progress(done=False):
             if not progress_callback:
                 return
             elapsed_now = (datetime.now() - start_time).total_seconds()
             progress_callback({
+                "nva": self.activity_tracker.live_totals(),
                 "frames_total": total_frames,
                 "frames_read": frame_count,
                 "frames_analyzed": processed_count,
@@ -124,15 +150,44 @@ class HelmetDetectionSystem:
                 "done": done,
             })
 
+        max_reconnects = int(getattr(self.config, "RTSP_RECONNECT_ATTEMPTS", 0)) if is_stream else 0
+        reconnect_delay = float(getattr(self.config, "RTSP_RECONNECT_DELAY", 3.0))
+        max_duration = float(getattr(self.config, "LIVE_MAX_DURATION_SECONDS", 0)) if is_stream else 0
+        reconnects = 0
+
         while True:
             if should_stop and should_stop():
                 cancelled = True
                 logger.info("Processing cancelled by caller")
                 break
 
-            ret, frame = cap.read()
-            if not ret:
+            elapsed_so_far = (datetime.now() - start_time).total_seconds()
+            if max_duration and elapsed_so_far >= max_duration:
+                logger.info(f"Live session reached its {max_duration:.0f}s limit")
                 break
+
+            ret, frame = (False, None) if cap is None else cap.read()
+            if not ret:
+                # For a file this is the end of the footage. For a stream it
+                # almost always means the network dropped, so reopen instead of
+                # reporting a complete run over partial coverage.
+                if reconnects >= max_reconnects:
+                    if is_stream:
+                        logger.warning(
+                            f"Stream ended after {reconnects} reconnect attempt(s)"
+                        )
+                    break
+                reconnects += 1
+                cap = self._reconnect_stream(
+                    cap, video_path, reconnect_delay, reconnects, max_reconnects
+                )
+                continue
+
+            if reconnects:
+                # A decoded frame means the link came back; allow the full
+                # retry budget again for any later drop.
+                logger.info("Stream recovered")
+                reconnects = 0
 
             frame_count += 1
 
@@ -144,7 +199,14 @@ class HelmetDetectionSystem:
 
             persons = self.detector.detect(frame)
             tracked_persons = self.tracker.update(persons, frame)
-            video_time = self._get_video_timestamp(frame_count, fps)
+            # Offsets into a recording are frame-based; a live feed is timed
+            # against the clock, because dropped frames would otherwise make
+            # the incident time drift away from when it actually happened.
+            position_seconds = (
+                elapsed_so_far if is_stream
+                else (frame_count / fps if fps > 0 else 0.0)
+            )
+            video_time = self._format_timestamp(position_seconds)
 
             persons_info = [
                 {
@@ -167,6 +229,8 @@ class HelmetDetectionSystem:
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
+            self.activity_tracker.update(tracked_persons, video_time, position_seconds)
+
             events = self.violation_tracker.update(
                 tracked_persons, frame, frame_count, video_time
             )
@@ -180,10 +244,15 @@ class HelmetDetectionSystem:
                 emit_progress()
 
             if processed_count % 100 == 0:
-                progress = (frame_count / total_frames) * 100
                 elapsed = (datetime.now() - start_time).total_seconds()
+                if total_frames:
+                    progress = (frame_count / total_frames) * 100
+                    position = f"Progress: {frame_count}/{total_frames} ({progress:.1f}%)"
+                else:
+                    # A live stream has no end to measure against.
+                    position = f"Live: {frame_count} frames received"
                 logger.info(
-                    f"Progress: {frame_count}/{total_frames} ({progress:.1f}%) | "
+                    f"{position} | "
                     f"Violations: {violation_count} | "
                     f"Elapsed: {elapsed:.1f}s"
                 )
@@ -199,6 +268,15 @@ class HelmetDetectionSystem:
 
         self.video_reader.release(cap)
         elapsed = (datetime.now() - start_time).total_seconds()
+
+        # Close any activity still in progress before summarising, so the last
+        # segment of the video is not silently dropped.
+        self.activity_tracker.finalize(position_seconds)
+        nva = self._finalize_activity_analysis(
+            nva_run_id, video_name, camera_name, camera_id, location,
+            "rtsp" if is_stream else "recording",
+        )
+
         emit_progress(done=True)
 
         report_path = self.report_generator.generate_excel_report(video_name)
@@ -212,6 +290,7 @@ class HelmetDetectionSystem:
                 f"Scene cross-check: {scene_persons_total} person-frames | "
                 f"{scene_helmet_ok} with helmet | {scene_no_helmet} without helmet"
             )
+        self._log_activity_summary(nva)
         logger.info(f"Total time: {elapsed:.1f}s")
         if report_path:
             logger.info(f"Report saved: {report_path}")
@@ -223,6 +302,8 @@ class HelmetDetectionSystem:
             "camera_name": camera_name,
             "camera_id": camera_id,
             "location": location,
+            "is_stream": is_stream,
+            "source_type": "rtsp" if is_stream else "recording",
             "total_frames": total_frames,
             "frames_processed": processed_count,
             "video_fps": fps,
@@ -235,6 +316,10 @@ class HelmetDetectionSystem:
             "compliant_frames": scene_helmet_ok,
             "people_detected": len(unique_tracks),
             "incidents": list(self.recorded_incidents),
+            # Value-stream analysis: where the observed operator time went, and
+            # what to do about the part of it that added no value.
+            "nva": nva,
+            "nva_run_id": nva_run_id,
             "elapsed_seconds": elapsed,
             "processing_fps": (processed_count / elapsed) if elapsed > 0 else 0.0,
             "cancelled": cancelled,
@@ -360,10 +445,99 @@ class HelmetDetectionSystem:
             f"Frame: {cand.frame_index} | Poster: {Path(poster_path).name if poster_path else 'n/a'}"
         )
 
-    def _get_video_timestamp(self, frame_count, fps):
-        if fps <= 0:
-            return "00:00:00"
-        total_seconds = int(frame_count / fps)
+    def _finalize_activity_analysis(self, run_id, video_name, camera_name,
+                                    camera_id, location, source_type):
+        """Summarise, store and act on the run's activity segments.
+
+        Returns the value-stream breakdown with its recommendations attached,
+        or None when NVA analysis is switched off.
+        """
+        tracker = self.activity_tracker
+        if not tracker.enabled:
+            return None
+
+        breakdown = summarize(
+            tracker.segments,
+            observed_seconds=tracker.observed_seconds,
+            tracks=len(tracker.tracks_seen),
+        )
+        breakdown["run_id"] = run_id
+        breakdown["recommendations"] = build_recommendations(breakdown, self.config)
+
+        records = [
+            {
+                "run_id": run_id,
+                "camera_id": camera_id,
+                "camera_name": camera_name,
+                "location": location,
+                "video_name": video_name,
+                "source_type": source_type,
+                **segment.to_dict(),
+            }
+            for segment in tracker.segments
+        ]
+        self.report_generator.nva_segments = records
+        self.report_generator.nva_breakdown = breakdown
+
+        if records:
+            try:
+                self.db.insert_nva_activities(records)
+            except Exception as exc:
+                logger.error(f"Could not store NVA activity segments: {exc}")
+
+        return breakdown
+
+    @staticmethod
+    def _log_activity_summary(breakdown):
+        """Print the value-stream result and the top actions to the log."""
+        if not breakdown or not breakdown.get("classified_seconds"):
+            return
+
+        logger.info(
+            f"VALUE STREAM | Observed {breakdown['observed_duration']} of operator time | "
+            f"classified {breakdown['classified_duration']}"
+        )
+        for row in breakdown["value_split"]:
+            logger.info(
+                f"  {row['value_class']:<5} {row['label']:<20} "
+                f"{row['duration']:>9} ({row['share']:.1f}%)"
+            )
+        for row in breakdown["by_activity"]:
+            logger.info(
+                f"  ACTIVITY | {row['label']:<36} {row['duration']:>9} "
+                f"({row['share']:.1f}%) over {row['occurrences']} occurrence(s)"
+            )
+        for index, action in enumerate(breakdown.get("recommendations", []), 1):
+            logger.info(
+                f"  RECOMMENDATION {index} [{action['severity'].upper()}] {action['title']}"
+            )
+            logger.info(f"      {action['observation']}")
+            logger.info(f"      Lean tool: {action['lean_tool']}")
+
+    def _reconnect_stream(self, cap, url, delay, attempt, total_attempts):
+        """Reopen a dropped stream. Returns the new capture, or None to retry.
+
+        Returning None is not a failure the caller has to handle: the read loop
+        treats a missing capture as a failed read, so the next iteration simply
+        spends another attempt from the same budget.
+        """
+        safe_url = self.config.redact_rtsp_url(url) if is_stream_source(url) else str(url)
+        logger.warning(
+            f"Stream read failed — reconnecting to {safe_url} "
+            f"({attempt}/{total_attempts}) in {delay:.1f}s"
+        )
+        self.video_reader.release(cap)
+        time.sleep(delay)
+        try:
+            new_cap, _ = self.video_reader.open(url)
+            return new_cap
+        except Exception as exc:
+            logger.warning(f"Reconnect attempt {attempt} failed: {exc}")
+            return None
+
+    @staticmethod
+    def _format_timestamp(total_seconds):
+        total_seconds = int(max(0, total_seconds))
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
@@ -429,7 +603,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="AI-Based Helmet Detection and Safety Violation Reporting System"
     )
-    parser.add_argument("video", nargs="?", help="Path to CCTV video file")
+    parser.add_argument("video", nargs="?", help="Path to CCTV video file, or an rtsp:// URL")
     parser.add_argument("--camera-name", default=None, help="Camera name")
     parser.add_argument("--camera-id", default=None, help="Camera ID")
     parser.add_argument("--location", default=None, help="Location")
@@ -437,12 +611,22 @@ def main():
     parser.add_argument("--conf", type=float, default=None, help="Confidence threshold (0-1)")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive video selector")
     parser.add_argument("--preview", action="store_true", help="Show live annotated frame preview window")
+    parser.add_argument("--camera-ip", default=None,
+                        help="Hikvision camera IP — analyse its live RTSP stream instead of a file")
+    parser.add_argument("--rtsp-port", type=int, default=None, help="RTSP port (default 554)")
+    parser.add_argument("--rtsp-channel", default=None,
+                        help="Hikvision channel: 101 = main stream, 102 = sub stream")
+    parser.add_argument("--duration", type=float, default=None,
+                        help="Stop live analysis after N seconds (default: run until Ctrl-C)")
 
     args = parser.parse_args()
 
     if args.conf is not None:
         cfg.CONFIDENCE_THRESHOLD = max(0.0, min(1.0, args.conf))
         logger.info(f"Confidence threshold set to: {cfg.CONFIDENCE_THRESHOLD}")
+
+    if args.duration is not None:
+        cfg.LIVE_MAX_DURATION_SECONDS = max(0.0, args.duration)
 
     if args.list_videos:
         videos = _find_videos(cfg.VIDEOS_DIR)
@@ -456,10 +640,25 @@ def main():
             print("Place .mp4/.avi/.mov files in the videos/ directory")
         return
 
-    if args.interactive or not args.video:
+    if args.camera_ip:
+        video_path = cfg.rtsp_url(
+            args.camera_ip, port=args.rtsp_port, channel=args.rtsp_channel
+        )
+        logger.info(f"Live source: {cfg.redact_rtsp_url(video_path)}")
+        if not cfg.RTSP_USERNAME:
+            logger.warning(
+                "RTSP_USERNAME is not set in .env — this only works if the camera "
+                "allows anonymous streaming, which Hikvision disables by default."
+            )
+    elif args.interactive or not args.video:
         video_path = _interactive_select()
     else:
         video_path = args.video
+
+    # Ctrl-C on a live run should end the session the same way the dashboard's
+    # stop button does, so the report and incident records are still written.
+    stop_requested = []
+    signal.signal(signal.SIGINT, lambda *_: stop_requested.append(True))
 
     system = HelmetDetectionSystem()
     result = system.process_video(
@@ -468,6 +667,7 @@ def main():
         camera_id=args.camera_id,
         location=args.location,
         preview=args.preview,
+        should_stop=lambda: bool(stop_requested),
     )
 
     print("\n" + "=" * 60)
@@ -480,7 +680,46 @@ def main():
     print(f"  Time elapsed:   {result['elapsed_seconds']:.1f}s")
     if result["report_path"]:
         print(f"  Report:         {result['report_path']}")
+    _print_nva_summary(result.get("nva"))
     print("=" * 60)
+
+
+def _print_nva_summary(breakdown):
+    """Value-stream result and the ranked actions, for the CLI operator."""
+    if not breakdown or not breakdown.get("classified_seconds"):
+        return
+
+    print("\n" + "-" * 60)
+    print("VALUE STREAM (NVA ANALYSIS)")
+    print("-" * 60)
+    print(f"  Observed operator time: {breakdown['observed_duration']}")
+    print(f"  Classified:             {breakdown['classified_duration']}")
+    for row in breakdown["value_split"]:
+        print(f"  {row['label']:<20} {row['duration']:>9}  {row['share']:>5.1f}%")
+
+    print("\n  Activity breakdown")
+    for row in breakdown["by_activity"]:
+        marker = "NVA " if row["value_class"] == "NVA" else "    "
+        print(
+            f"   {marker}{row['label']:<36} {row['duration']:>9} "
+            f"{row['share']:>5.1f}%  x{row['occurrences']}"
+        )
+
+    recommendations = breakdown.get("recommendations") or []
+    if not recommendations:
+        print("\n  No waste crossed the reporting threshold — nothing to action.")
+        return
+
+    print("\n  Recommendations (highest measured cost first)")
+    for index, action in enumerate(recommendations, 1):
+        print(f"\n   {index}. [{action['severity'].upper()}] {action['title']}")
+        if action.get("waste"):
+            print(f"      Waste:  {action['waste']}")
+        print(f"      Seen:   {action['observation']}")
+        print(f"      Tool:   {action['lean_tool']}")
+        for step in action["actions"]:
+            print(f"        - {step}")
+        print(f"      Impact: {action['expected_impact']}")
 
 
 if __name__ == "__main__":

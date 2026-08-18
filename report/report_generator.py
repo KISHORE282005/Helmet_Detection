@@ -12,6 +12,11 @@ class ReportGenerator:
     def __init__(self, config):
         self.config = config
         self.incidents = []
+        # Value-stream analysis for the current run, filled in by the pipeline
+        # once the video ends. Safety and productivity ship in one workbook so
+        # a supervisor reads one file, not two.
+        self.nva_segments = []
+        self.nva_breakdown = None
         self.db = DatabaseManager(config.DATABASE_DIR / "violations.db")
 
     def add_incident(self, incident):
@@ -54,10 +59,24 @@ class ReportGenerator:
             logger.error(f"Database save failed: {e}")
 
     def generate_excel_report(self, video_name="Unknown"):
-        if not self.incidents:
-            logger.info("No incidents to report")
+        if not self.incidents and not self.nva_segments:
+            logger.info("No incidents or activity segments to report")
             return None
 
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = Path(video_name).stem
+        report_path = self.config.REPORTS_DIR / f"Safety_Report_{safe_name}_{timestamp}.xlsx"
+
+        with pd.ExcelWriter(str(report_path), engine="openpyxl") as writer:
+            if self.incidents:
+                self._write_sheet(writer, "Violations", self._violations_frame())
+            for name, frame in self._nva_frames():
+                self._write_sheet(writer, name, frame)
+
+        logger.info(f"Excel report generated: {report_path}")
+        return str(report_path)
+
+    def _violations_frame(self):
         df = pd.DataFrame(self.incidents)
         columns = [
             "incident_id", "camera_name", "camera_id", "location",
@@ -72,20 +91,103 @@ class ReportGenerator:
             "Violation Type", "Confidence Score", "Track ID", "Status",
             "Persons in Frame", "With Helmet", "Without Helmet",
         ]
+        return df
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = Path(video_name).stem
-        report_path = self.config.REPORTS_DIR / f"Safety_Report_{safe_name}_{timestamp}.xlsx"
+    def _nva_frames(self):
+        """The value-stream sheets: summary, raw segments, recommendations."""
+        sheets = []
+        breakdown = self.nva_breakdown or {}
 
-        with pd.ExcelWriter(str(report_path), engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name="Violations", index=False)
-            sheet = writer.sheets["Violations"]
-            for col in sheet.columns:
-                max_len = max(len(str(cell.value or "")) for cell in col) + 2
-                sheet.column_dimensions[col[0].column_letter].width = min(max_len, 50)
+        if breakdown.get("classified_seconds"):
+            summary_rows = [
+                {"Metric": "Observed operator time", "Value": breakdown["observed_duration"],
+                 "Seconds": breakdown["observed_seconds"], "Share": ""},
+                {"Metric": "Classified time", "Value": breakdown["classified_duration"],
+                 "Seconds": breakdown["classified_seconds"], "Share": ""},
+                {"Metric": "People analysed", "Value": breakdown.get("tracks", 0),
+                 "Seconds": "", "Share": ""},
+            ]
+            summary_rows += [
+                {
+                    "Metric": row["label"],
+                    "Value": row["duration"],
+                    "Seconds": row["seconds"],
+                    "Share": f"{row['share']:.1f}%",
+                }
+                for row in breakdown["value_split"]
+            ]
+            sheets.append(("Value Stream", pd.DataFrame(summary_rows)))
 
-        logger.info(f"Excel report generated: {report_path}")
-        return str(report_path)
+            activity_rows = [
+                {
+                    "Activity": row["label"],
+                    "Classification": row["value_class"],
+                    "Lean Waste": row["waste"] or "—",
+                    "Duration": row["duration"],
+                    "Seconds": row["seconds"],
+                    "Share": f"{row['share']:.1f}%",
+                    "Occurrences": row["occurrences"],
+                    "Average Length (s)": row["avg_seconds"],
+                    "Why It Is Classified This Way": row["description"],
+                }
+                for row in breakdown["by_activity"]
+            ]
+            if activity_rows:
+                sheets.append(("Activity Breakdown", pd.DataFrame(activity_rows)))
+
+        if self.nva_segments:
+            segment_rows = [
+                {
+                    "Camera ID": segment.get("camera_id", ""),
+                    "Camera Name": segment.get("camera_name", ""),
+                    "Location": segment.get("location", ""),
+                    "Video Name": segment.get("video_name", ""),
+                    "Track ID": segment.get("track_id", 0),
+                    "Activity": segment.get("label", segment.get("activity", "")),
+                    "Classification": segment.get("value_class", ""),
+                    "Lean Waste": segment.get("waste") or "—",
+                    "Start": segment.get("start_time", ""),
+                    "End": segment.get("end_time", ""),
+                    "Duration (s)": segment.get("duration_seconds", 0.0),
+                    "Confidence": segment.get("confidence", 0.0),
+                }
+                for segment in self.nva_segments
+            ]
+            sheets.append(("NVA Activities", pd.DataFrame(segment_rows)))
+
+        recommendations = breakdown.get("recommendations") or []
+        if recommendations:
+            sheets.append(("Recommendations", pd.DataFrame([
+                {
+                    "Priority": index,
+                    "Severity": action["severity"].upper(),
+                    "Recommendation": action["title"],
+                    "Lean Waste": action.get("waste") or "—",
+                    "Observed": action["observation"],
+                    "Share of Time": f"{action['share']:.1f}%",
+                    "Likely Root Causes": "\n".join(action["root_causes"]),
+                    "Actions": "\n".join(f"{i}. {step}" for i, step in enumerate(action["actions"], 1)),
+                    "Lean Tool": action["lean_tool"],
+                    "Expected Impact": action["expected_impact"],
+                    "How To Verify": action["verify"],
+                }
+                for index, action in enumerate(recommendations, 1)
+            ])))
+
+        return sheets
+
+    @staticmethod
+    def _write_sheet(writer, name, frame):
+        frame.to_excel(writer, sheet_name=name, index=False)
+        sheet = writer.sheets[name]
+        for col in sheet.columns:
+            # Multi-line cells (action lists) would otherwise force a column
+            # as wide as the whole paragraph.
+            longest = max(
+                (len(line) for cell in col for line in str(cell.value or "").split("\n")),
+                default=0,
+            )
+            sheet.column_dimensions[col[0].column_letter].width = min(longest + 2, 60)
 
     def get_incident_count(self):
         return len(self.incidents)

@@ -82,6 +82,21 @@ def get_system():
     return _system
 
 
+def new_system():
+    """Build a private pipeline instance for a long-running live session.
+
+    `process_video` keeps per-run state on the instance (the violation tracker,
+    confirmed track ids, the current analysis id), so a live session cannot
+    share the module singleton with the recorded-analysis worker without the
+    two overwriting each other's counters mid-run. The cost is a second copy of
+    the model weights, which is why LIVE_MAX_SESSIONS defaults to 1.
+    """
+    from app import HelmetDetectionSystem
+
+    logger.info("Loading detection models for a live session...")
+    return HelmetDetectionSystem()
+
+
 def resolve_media(kind, name):
     """Map a (kind, filename) pair to a real file inside an allowed root.
 

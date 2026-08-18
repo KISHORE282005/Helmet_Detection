@@ -42,6 +42,12 @@ async def lifespan(app: FastAPI):
     logger.info("SafeVision AI API ready")
     yield
     monitor.stop()
+    # Live sessions run on daemon threads holding an open RTSP socket; asking
+    # them to stop lets each one write its report instead of being killed
+    # mid-frame at interpreter shutdown.
+    from .services.live_stream import live_manager
+
+    live_manager.stop_all()
 
 
 def create_app():

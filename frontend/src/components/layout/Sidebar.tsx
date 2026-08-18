@@ -35,7 +35,7 @@ export function Sidebar({
       items: [
         { to: '/', label: 'Dashboard' },
         { to: '/live', label: 'Live Cameras' },
-        { to: '/grid', label: 'Camera Grid' },
+        
         { to: '/analysis', label: 'Video Analysis' },
       ],
     },
@@ -44,21 +44,25 @@ export function Sidebar({
       items: [
         { to: '/violations', label: 'Active Violations', badge: openViolations },
         { to: '/incidents', label: 'Incident History' },
-        { to: '/evidence', label: 'Evidence' },
+        
       ],
+    },
+    {
+      title: 'Productivity',
+      items: [{ to: '/nva', label: 'NVA Analysis' }],
     },
     {
       title: 'Reports',
       items: [
         { to: '/reports', label: 'Safety Reports' },
-        { to: '/analytics', label: 'Analytics' },
+        
       ],
     },
     {
       title: 'System',
       items: [
         { to: '/cameras', label: 'Cameras' },
-        { to: '/models', label: 'AI Models' },
+       
         { to: '/settings', label: 'Settings' },
       ],
     },
@@ -134,46 +138,6 @@ export function Sidebar({
         ))}
       </nav>
 
-      <div className="border-t border-line px-4 py-3">
-        <div className="eyebrow pb-2">System Status</div>
-        <ul className="flex flex-col gap-1.5">
-          {summary.length === 0
-            ? headline.map((name) => (
-                <li key={name} className="flex items-center gap-2 text-[11px] text-ink-3">
-                  <StatusDot tone="neutral" size="sm" label={name} />
-                </li>
-              ))
-            : summary.map((component) => (
-                <li
-                  key={component.name}
-                  className="flex items-center justify-between gap-2 text-[11px] text-ink-2"
-                  title={component.detail}
-                >
-                  <StatusDot
-                    tone={statusTone(component.status)}
-                    size="sm"
-                    label={component.name}
-                  />
-                  <span
-                    className={cx(
-                      'shrink-0 text-[10px] font-medium uppercase',
-                      component.status === 'online' && 'text-good',
-                      component.status === 'degraded' && 'text-warning',
-                      component.status === 'offline' && 'text-critical',
-                    )}
-                  >
-                    {component.status}
-                  </span>
-                </li>
-              ))}
-        </ul>
-        {health.data && (
-          <p className="mt-2.5 border-t border-line pt-2 text-[10px] text-ink-3">
-            Phase {health.data.phase} ·{' '}
-            {health.data.mode === 'recorded' ? 'Recorded video input' : 'Live RTSP input'}
-          </p>
-        )}
-      </div>
     </aside>
   );
 }

@@ -92,6 +92,33 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
     status TEXT DEFAULT 'completed'
 );
 
+-- One row per confirmed NVA/VA activity segment (a continuous run of a single
+-- activity by one tracked person). Aggregated into the value-stream breakdown.
+CREATE TABLE IF NOT EXISTS nva_activities (
+    activity_id TEXT PRIMARY KEY,
+    run_id TEXT,
+    camera_id TEXT,
+    camera_name TEXT,
+    location TEXT,
+    video_name TEXT,
+    source_type TEXT DEFAULT 'recording',
+    track_id INTEGER,
+    activity TEXT,
+    value_class TEXT,
+    waste TEXT,
+    start_time TEXT,
+    end_time TEXT,
+    duration_seconds REAL DEFAULT 0,
+    confidence REAL DEFAULT 0,
+    avg_speed REAL DEFAULT 0,
+    net_displacement REAL DEFAULT 0,
+    date TEXT,
+    detected_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_nva_date ON nva_activities(date);
+CREATE INDEX IF NOT EXISTS idx_nva_run ON nva_activities(run_id);
+
 CREATE TABLE IF NOT EXISTS email_log (
     email_log_id TEXT PRIMARY KEY,
     violation_id TEXT,
@@ -132,7 +159,24 @@ MIGRATIONS = {
         ("target_fps", "INTEGER DEFAULT 0"),
         ("last_seen", "TEXT DEFAULT ''"),
     ],
+    "analysis_runs": [
+        # Value-stream totals for the run, so the NVA headline figures survive
+        # a restart without re-aggregating every stored segment.
+        ("observed_seconds", "REAL DEFAULT 0"),
+        ("classified_seconds", "REAL DEFAULT 0"),
+        ("va_seconds", "REAL DEFAULT 0"),
+        ("nnva_seconds", "REAL DEFAULT 0"),
+        ("nva_seconds", "REAL DEFAULT 0"),
+    ],
 }
+
+INSERT_NVA_ACTIVITY_SQL = """
+INSERT OR REPLACE INTO nva_activities
+(activity_id, run_id, camera_id, camera_name, location, video_name, source_type,
+ track_id, activity, value_class, waste, start_time, end_time, duration_seconds,
+ confidence, avg_speed, net_displacement, date, detected_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
 
 INSERT_VIOLATION_SQL = """
 INSERT OR REPLACE INTO violations
@@ -622,8 +666,11 @@ class DatabaseManager:
                 (run_id, video_name, source_type, camera_id, camera_name, location,
                  started_at, finished_at, date, total_frames, frames_analyzed,
                  people_detected, person_frames, compliant_frames, raw_detections,
-                 unique_incidents, elapsed_seconds, processing_fps, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 unique_incidents, elapsed_seconds, processing_fps, status,
+                 observed_seconds, classified_seconds, va_seconds, nnva_seconds,
+                 nva_seconds)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?)
                 """,
                 (
                     record["run_id"],
@@ -645,6 +692,11 @@ class DatabaseManager:
                     record.get("elapsed_seconds", 0.0),
                     record.get("processing_fps", 0.0),
                     record.get("status", "completed"),
+                    record.get("observed_seconds", 0.0),
+                    record.get("classified_seconds", 0.0),
+                    record.get("va_seconds", 0.0),
+                    record.get("nnva_seconds", 0.0),
+                    record.get("nva_seconds", 0.0),
                 ),
             )
         return record["run_id"]
@@ -668,7 +720,9 @@ class DatabaseManager:
                    COALESCE(SUM(compliant_frames), 0) AS compliant_frames,
                    COALESCE(SUM(raw_detections), 0) AS raw_detections,
                    COALESCE(SUM(unique_incidents), 0) AS unique_incidents,
-                   COALESCE(SUM(frames_analyzed), 0) AS frames_analyzed
+                   COALESCE(SUM(frames_analyzed), 0) AS frames_analyzed,
+                   COALESCE(SUM(observed_seconds), 0) AS observed_seconds,
+                   COALESCE(SUM(classified_seconds), 0) AS classified_seconds
             FROM analysis_runs{where}
             """,
             tuple(params),
@@ -679,6 +733,197 @@ class DatabaseManager:
         return self._fetch_dicts(
             "SELECT * FROM analysis_runs ORDER BY finished_at DESC LIMIT ?", (int(limit),)
         )
+
+    # ------------------------------------------------------------------
+    # NVA_ACTIVITIES (value-stream / non-value-added analysis)
+    # ------------------------------------------------------------------
+    def insert_nva_activities(self, records):
+        """Store a run's activity segments. Returns the ids written.
+
+        IDs are allocated once for the batch and incremented locally: asking
+        the table for the next id per row would make a long run's write O(n²).
+        """
+        records = list(records)
+        if not records:
+            return []
+
+        start = self._next_id("nva_activities", "NVA", "activity_id")
+        try:
+            counter = int(start.lstrip("NVA"))
+        except ValueError:
+            counter = 1
+
+        now = datetime.now().isoformat(timespec="seconds")
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows, ids = [], []
+        for offset, record in enumerate(records):
+            activity_id = f"NVA{counter + offset:06d}"
+            ids.append(activity_id)
+            rows.append((
+                activity_id,
+                record.get("run_id", ""),
+                record.get("camera_id", ""),
+                record.get("camera_name", ""),
+                record.get("location", ""),
+                record.get("video_name", ""),
+                record.get("source_type", "recording"),
+                record.get("track_id", 0),
+                record.get("activity", ""),
+                record.get("value_class", ""),
+                record.get("waste", "") or "",
+                record.get("start_time", ""),
+                record.get("end_time", ""),
+                float(record.get("duration_seconds", 0.0)),
+                float(record.get("confidence", 0.0)),
+                float(record.get("avg_speed", 0.0)),
+                float(record.get("net_displacement", 0.0)),
+                record.get("date", today),
+                record.get("detected_at", now),
+            ))
+
+        with self.connect() as conn:
+            conn.executemany(INSERT_NVA_ACTIVITY_SQL, rows)
+        logger.info(f"{len(rows)} NVA activity segments recorded")
+        return ids
+
+    @staticmethod
+    def _nva_filters(filters):
+        clauses, params = [], []
+        mapping = {
+            "run_id": "run_id = ?",
+            "camera_id": "camera_id = ?",
+            "location": "location = ?",
+            "activity": "activity = ?",
+            "value_class": "value_class = ?",
+            "waste": "waste = ?",
+            "video_name": "video_name = ?",
+            "source_type": "source_type = ?",
+        }
+        for key, clause in mapping.items():
+            value = (filters or {}).get(key)
+            if value:
+                clauses.append(clause)
+                params.append(value)
+        if (filters or {}).get("date_from"):
+            clauses.append("date >= ?")
+            params.append(filters["date_from"])
+        if (filters or {}).get("date_to"):
+            clauses.append("date <= ?")
+            params.append(filters["date_to"])
+        if (filters or {}).get("min_duration") is not None:
+            clauses.append("duration_seconds >= ?")
+            params.append(float(filters["min_duration"]))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return where, params
+
+    def nva_by_activity(self, filters=None):
+        """Seconds and occurrences per activity — the breakdown's input."""
+        where, params = self._nva_filters(filters)
+        return self._fetch_dicts(
+            f"""
+            SELECT activity,
+                   COALESCE(SUM(duration_seconds), 0) AS seconds,
+                   COUNT(*) AS occurrences
+            FROM nva_activities{where}
+            GROUP BY activity ORDER BY seconds DESC
+            """,
+            tuple(params),
+        )
+
+    def nva_grouped(self, column, filters=None, limit=12):
+        """NVA seconds grouped by camera, location, video or date."""
+        allowed = {"camera_id", "camera_name", "location", "video_name", "date", "track_id"}
+        if column not in allowed:
+            raise ValueError(f"Cannot group NVA activities by {column!r}")
+        where, params = self._nva_filters(filters)
+        return self._fetch_dicts(
+            f"""
+            SELECT {column} AS key,
+                   COALESCE(SUM(duration_seconds), 0) AS seconds,
+                   COALESCE(SUM(CASE WHEN value_class = 'NVA' THEN duration_seconds END), 0)
+                       AS nva_seconds,
+                   COALESCE(SUM(CASE WHEN value_class = 'VA' THEN duration_seconds END), 0)
+                       AS va_seconds,
+                   COUNT(*) AS occurrences
+            FROM nva_activities{where}
+            GROUP BY {column} ORDER BY nva_seconds DESC LIMIT ?
+            """,
+            tuple(params) + (int(limit),),
+        )
+
+    def nva_daily(self, date_from, date_to, filters=None):
+        """Per-day VA vs NVA seconds, for the value-stream trend."""
+        merged = dict(filters or {})
+        merged.update({"date_from": date_from, "date_to": date_to})
+        where, params = self._nva_filters(merged)
+        return self._fetch_dicts(
+            f"""
+            SELECT date AS key,
+                   COALESCE(SUM(CASE WHEN value_class = 'VA' THEN duration_seconds END), 0)
+                       AS va_seconds,
+                   COALESCE(SUM(CASE WHEN value_class = 'NNVA' THEN duration_seconds END), 0)
+                       AS nnva_seconds,
+                   COALESCE(SUM(CASE WHEN value_class = 'NVA' THEN duration_seconds END), 0)
+                       AS nva_seconds
+            FROM nva_activities{where}
+            GROUP BY date ORDER BY date ASC
+            """,
+            tuple(params),
+        )
+
+    def query_nva_activities(self, filters=None, limit=50, offset=0,
+                             order_by="duration_seconds", direction="DESC"):
+        where, params = self._nva_filters(filters)
+        allowed = {
+            "duration_seconds", "date", "start_time", "activity",
+            "value_class", "camera_id", "track_id", "detected_at",
+        }
+        column = order_by if order_by in allowed else "duration_seconds"
+        arrow = "ASC" if str(direction).upper() == "ASC" else "DESC"
+        return self._fetch_dicts(
+            f"SELECT * FROM nva_activities{where} "
+            f"ORDER BY {column} {arrow}, activity_id {arrow} LIMIT ? OFFSET ?",
+            tuple(params) + (int(limit), int(offset)),
+        )
+
+    def count_nva_activities(self, filters=None):
+        where, params = self._nva_filters(filters)
+        rows = self.execute_query(f"SELECT COUNT(*) FROM nva_activities{where}", tuple(params))
+        return rows[0][0] if rows else 0
+
+    def nva_observed_seconds(self, filters=None):
+        """Observed person-time from the runs the filters select.
+
+        Comes from analysis_runs rather than the segments, because time a
+        person was visible but not classifiable still counts as observed.
+        """
+        clauses, params = [], []
+        for key, clause in (("run_id", "run_id = ?"), ("camera_id", "camera_id = ?"),
+                            ("location", "location = ?"), ("source_type", "source_type = ?")):
+            value = (filters or {}).get(key)
+            if value:
+                clauses.append(clause)
+                params.append(value)
+        if (filters or {}).get("date_from"):
+            clauses.append("date >= ?")
+            params.append(filters["date_from"])
+        if (filters or {}).get("date_to"):
+            clauses.append("date <= ?")
+            params.append(filters["date_to"])
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self.execute_query(
+            f"SELECT COALESCE(SUM(observed_seconds), 0) FROM analysis_runs{where}",
+            tuple(params),
+        )
+        return float(rows[0][0]) if rows else 0.0
+
+    def nva_track_count(self, filters=None):
+        where, params = self._nva_filters(filters)
+        rows = self.execute_query(
+            f"SELECT COUNT(DISTINCT run_id || ':' || track_id) FROM nva_activities{where}",
+            tuple(params),
+        )
+        return rows[0][0] if rows else 0
 
     # ------------------------------------------------------------------
     # EMAIL_LOG
