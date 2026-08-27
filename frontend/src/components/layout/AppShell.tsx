@@ -1,7 +1,7 @@
 /** Fixed sidebar + header frame. Only the content column scrolls, so the
  *  header and system status stay visible on a wall-mounted monitor. */
 
-import { type ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { useDashboard } from '../../lib/hooks';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
@@ -9,12 +9,15 @@ import { cx } from '../ui/primitives';
 
 export function AppShell({ children }: { children: ReactNode }) {
   const dashboard = useDashboard();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-plane">
       <Sidebar
         openViolations={dashboard.data?.active_violations.count ?? 0}
         className="flex"
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((collapsed) => !collapsed)}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">

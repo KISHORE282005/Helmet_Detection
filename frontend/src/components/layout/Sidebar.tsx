@@ -22,10 +22,14 @@ export function Sidebar({
   openViolations,
   onNavigate,
   className,
+  collapsed = false,
+  onToggle,
 }: {
   openViolations: number;
   onNavigate?: () => void;
   className?: string;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
   const health = useHealth();
 
@@ -78,66 +82,99 @@ export function Sidebar({
   return (
     <aside
       className={cx(
-        'flex h-full w-60 shrink-0 flex-col border-r border-line bg-surface',
+        'flex h-full shrink-0 flex-col border-r border-line bg-surface transition-[width] duration-200',
+        collapsed ? 'w-12' : 'w-60',
         className,
       )}
     >
-      <div className="flex items-center gap-2.5 border-b border-line px-4 py-3.5">
+      <div className="flex items-center gap-2.5 border-b border-line px-3 py-3.5">
         <Logo />
-        <div className="min-w-0">
-          <div className="truncate text-[15px] leading-tight font-semibold tracking-tight text-ink">
-            SafeVision <span className="text-accent">AI</span>
+        {!collapsed && (
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[15px] leading-tight font-semibold tracking-tight text-ink">
+              SafeVision <span className="text-accent">AI</span>
+            </div>
+            <div className="truncate text-[10px] text-ink-3">Industrial Safety Intelligence</div>
           </div>
-          <div className="truncate text-[10px] text-ink-3">Industrial Safety Intelligence</div>
-        </div>
+        )}
+        {onToggle && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className={cx(
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink',
+              collapsed && 'ml-auto',
+            )}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className={cx('h-4 w-4 transition-transform duration-200', collapsed && 'rotate-180')}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              {collapsed ? (
+                <path d="m13 7 5 5-5 5M6 7l5 5-5 5" />
+              ) : (
+                <path d="m11 7-5 5 5 5M18 7l-5 5 5 5" />
+              )}
+            </svg>
+          </button>
+        )}
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
-        {groups.map((group) => (
-          <div key={group.title} className="mb-4 last:mb-0">
-            <div className="eyebrow px-2 pb-1.5">{group.title}</div>
-            <ul className="flex flex-col gap-0.5">
-              {group.items.map((item) => (
-                <li key={item.to}>
-                  <NavLink
-                    to={item.to}
-                    end={item.to === '/'}
-                    onClick={onNavigate}
-                    className={({ isActive }) =>
-                      cx(
-                        'flex items-center justify-between gap-2 rounded px-2 py-1.5 text-[13px] transition-colors',
-                        isActive
-                          ? 'bg-accent-soft font-medium text-ink'
-                          : 'text-ink-2 hover:bg-surface-2 hover:text-ink',
-                      )
-                    }
-                  >
-                    {({ isActive }) => (
-                      <>
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span
-                            className={cx(
-                              'h-3.5 w-[2px] shrink-0 rounded-full',
-                              isActive ? 'bg-accent' : 'bg-transparent',
-                            )}
-                          />
-                          <span className="truncate">{item.label}</span>
-                        </span>
-                        {item.badge ? (
-                          <span className="tabular shrink-0 rounded bg-critical/18 px-1.5 py-px text-[10px] font-semibold text-critical">
-                            {item.badge}
+      {!collapsed && (
+        <nav className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
+          {groups.map((group) => (
+            <div key={group.title} className="mb-4 last:mb-0">
+              <div className="eyebrow px-2 pb-1.5">{group.title}</div>
+              <ul className="flex flex-col gap-0.5">
+                {group.items.map((item) => (
+                  <li key={item.to}>
+                    <NavLink
+                      to={item.to}
+                      end={item.to === '/'}
+                      onClick={onNavigate}
+                      className={({ isActive }) =>
+                        cx(
+                          'flex items-center justify-between gap-2 rounded px-2 py-1.5 text-[13px] transition-colors',
+                          isActive
+                            ? 'bg-accent-soft font-medium text-ink'
+                            : 'text-ink-2 hover:bg-surface-2 hover:text-ink',
+                        )
+                      }
+                    >
+                      {({ isActive }) => (
+                        <>
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span
+                              className={cx(
+                                'h-3.5 w-[2px] shrink-0 rounded-full',
+                                isActive ? 'bg-accent' : 'bg-transparent',
+                              )}
+                            />
+                            <span className="truncate">{item.label}</span>
                           </span>
-                        ) : null}
-                      </>
-                    )}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </nav>
-
+                          {item.badge ? (
+                            <span className="tabular shrink-0 rounded bg-critical/18 px-1.5 py-px text-[10px] font-semibold text-critical">
+                              {item.badge}
+                            </span>
+                          ) : null}
+                        </>
+                      )}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+      )}
     </aside>
   );
 }

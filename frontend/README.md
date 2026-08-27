@@ -7,11 +7,11 @@ analytics and the value stream.
 
 ## Prerequisites
 
-| Tool        | Version   | Why                                    |
-| ----------- | --------- | -------------------------------------- |
-| Node.js     | 18+       | Build and run the front end            |
-| npm         | 9+        | Package manager (ships with Node.js)   |
-| Python      | 3.10+     | Run the FastAPI backend (`../api`)     |
+| Tool    | Version | Why                                  |
+| ------- | ------- | ------------------------------------ |
+| Node.js | 18+     | Build and run the front end          |
+| npm     | 9+      | Package manager (ships with Node.js) |
+| Python  | 3.10+   | Run the FastAPI backend (`../api`) |
 
 Check your versions:
 
@@ -70,12 +70,12 @@ whenever `frontend/dist/` exists.
 
 Run these from the `frontend/` directory:
 
-| Command               | What it does                                              |
-| --------------------- | --------------------------------------------------------- |
-| `npm run dev`         | Start the Vite dev server on http://localhost:5173 (hot reload) |
-| `npm run build`       | Type-check (`tsc --noEmit`) then build to `dist/`         |
-| `npm run preview`     | Preview the production build locally (after `npm run build`) |
-| `npm run typecheck`   | Type-check only, no output                                |
+| Command               | What it does                                                    |
+| --------------------- | --------------------------------------------------------------- |
+| `npm run dev`       | Start the Vite dev server on http://localhost:5173 (hot reload) |
+| `npm run build`     | Type-check (`tsc --noEmit`) then build to `dist/`           |
+| `npm run preview`   | Preview the production build locally (after`npm run build`)   |
+| `npm run typecheck` | Type-check only, no output                                      |
 
 ### One-shot dev workflow
 
@@ -92,21 +92,21 @@ npm run dev
 
 ## Project Layout
 
-| Path                          | Purpose                                             |
-| ----------------------------- | --------------------------------------------------- |
-| `src/main.tsx`                | React entry point                                   |
-| `src/App.tsx`                 | Route definitions                                   |
-| `src/index.css`               | Global styles, design tokens (single dark theme)    |
-| `src/lib/api.ts`              | Fetch wrapper, media and export URL helpers         |
-| `src/lib/hooks.ts`            | React Query bindings and the polling intervals      |
-| `src/lib/types.ts`            | Wire types mirroring the API responses              |
-| `src/lib/format.ts`           | All display formatting (dates, percentages, sizes)  |
-| `src/components/ui/primitives.tsx` | Panels, badges, buttons, inputs, modal, icons   |
-| `src/components/charts/charts.tsx` | SVG trend, bar, column and meter charts          |
-| `src/components/layout/`      | Sidebar, top bar, page frame                        |
-| `src/components/domain/`      | Stat tiles, camera tiles, incident cards            |
-| `src/pages/`                  | One file per route                                  |
-| `dist/`                       | Production build (served by FastAPI)                |
+| Path                                 | Purpose                                            |
+| ------------------------------------ | -------------------------------------------------- |
+| `src/main.tsx`                     | React entry point                                  |
+| `src/App.tsx`                      | Route definitions                                  |
+| `src/index.css`                    | Global styles, design tokens (single dark theme)   |
+| `src/lib/api.ts`                   | Fetch wrapper, media and export URL helpers        |
+| `src/lib/hooks.ts`                 | React Query bindings and the polling intervals     |
+| `src/lib/types.ts`                 | Wire types mirroring the API responses             |
+| `src/lib/format.ts`                | All display formatting (dates, percentages, sizes) |
+| `src/components/ui/primitives.tsx` | Panels, badges, buttons, inputs, modal, icons      |
+| `src/components/charts/charts.tsx` | SVG trend, bar, column and meter charts            |
+| `src/components/layout/`           | Sidebar, top bar, page frame                       |
+| `src/components/domain/`           | Stat tiles, camera tiles, incident cards           |
+| `src/pages/`                       | One file per route                                 |
+| `dist/`                            | Production build (served by FastAPI)               |
 
 ## Tech Stack
 
@@ -130,9 +130,9 @@ npm run dev
 
 ## Troubleshooting
 
-| Problem                                  | Fix                                              |
-| ---------------------------------------- | ------------------------------------------------ |
-| Dashboard shows no data / network errors | Backend not running — start `python -m api --reload` in Terminal 1 |
-| Port 5173 already in use                 | Vite picks the next free port automatically; use that URL |
-| `npm install` fails                      | Upgrade Node to 18+ and retry                    |
-| API responses come from an older build   | Delete `dist/` and rebuild with `npm run build`  |
+| Problem                                  | Fix                                                                  |
+| ---------------------------------------- | -------------------------------------------------------------------- |
+| Dashboard shows no data / network errors | Backend not running — start`python -m api --reload` in Terminal 1 |
+| Port 5173 already in use                 | Vite picks the next free port automatically; use that URL            |
+| `npm install` fails                    | Upgrade Node to 18+ and retry                                        |
+| API responses come from an older build   | Delete`dist/` and rebuild with `npm run build`                   |
