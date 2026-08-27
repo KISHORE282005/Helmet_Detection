@@ -88,7 +88,7 @@ export function Sidebar({
       )}
     >
       <div className="flex items-center gap-2.5 border-b border-line px-3 py-3.5">
-        <Logo />
+        {!collapsed && <Logo />}
         {!collapsed && (
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] leading-tight font-semibold tracking-tight text-ink">
@@ -102,8 +102,8 @@ export function Sidebar({
             type="button"
             onClick={onToggle}
             className={cx(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink',
-              collapsed && 'ml-auto',
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded border border-line-strong bg-surface-2 text-ink-2 transition-colors hover:bg-surface hover:text-ink',
+              collapsed && 'mx-auto',
             )}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
