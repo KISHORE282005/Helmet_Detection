@@ -261,6 +261,12 @@ export interface AnalysisRun {
   elapsed_seconds: number;
   processing_fps: number;
   status: string;
+  /** Value-stream totals. Absent on runs analysed before NVA was enabled. */
+  observed_seconds?: number;
+  classified_seconds?: number;
+  va_seconds?: number;
+  nnva_seconds?: number;
+  nva_seconds?: number;
 }
 
 export interface SafetyReport {
@@ -327,4 +333,168 @@ export interface ModelsResponse {
     components: string[];
     note: string;
   };
+}
+
+/* ------------------------------------------------------- NVA analysis ---- */
+/** Every minute of observed operator time lands in exactly one of these. */
+export type ValueClass = 'VA' | 'NNVA' | 'NVA';
+
+export interface NvaCatalogEntry {
+  key: string;
+  label: string;
+  value_class: ValueClass | null;
+  waste: string | null;
+  description: string;
+  /** The exact rule that produces this label — shown so a number can be audited. */
+  detection: string;
+  min_seconds: number;
+}
+
+export interface NvaValueClass {
+  key: ValueClass;
+  label: string;
+  description: string;
+  tone: string;
+}
+
+export interface NvaThresholds {
+  enabled: boolean;
+  window_seconds: number;
+  idle_speed: number;
+  walk_speed: number;
+  search_straightness: number;
+  shuttle_reversals: number;
+  group_proximity: number;
+  idle_min_seconds: number;
+  min_segment_seconds: number;
+  target_va_ratio: number;
+  recommend_min_share: number;
+}
+
+export interface NvaCatalogResponse {
+  activities: NvaCatalogEntry[];
+  value_classes: NvaValueClass[];
+  thresholds: NvaThresholds;
+}
+
+export interface NvaActivityRow {
+  activity: string;
+  label: string;
+  value_class: ValueClass;
+  waste: string | null;
+  description: string;
+  seconds: number;
+  duration: string;
+  occurrences: number;
+  avg_seconds: number;
+  share: number;
+}
+
+export interface NvaValueSplitRow {
+  value_class: ValueClass;
+  label: string;
+  description: string;
+  tone: string;
+  seconds: number;
+  duration: string;
+  share: number;
+}
+
+export interface NvaWasteRow {
+  waste: string;
+  seconds: number;
+  duration: string;
+  occurrences: number;
+  share: number;
+  activities: string[];
+}
+
+export interface NvaRecommendation {
+  id: string;
+  activity: string | null;
+  title: string;
+  waste: string | null;
+  severity: 'high' | 'medium' | 'low';
+  share: number;
+  seconds: number;
+  occurrences: number;
+  observation: string;
+  root_causes: string[];
+  actions: string[];
+  lean_tool: string;
+  expected_impact: string;
+  verify: string;
+}
+
+export interface NvaGroupRow {
+  key: string;
+  seconds: number;
+  nva_seconds: number;
+  va_seconds: number;
+  duration: string;
+  occurrences: number;
+  count: number;
+  nva_share: number;
+}
+
+export interface NvaTrendPoint {
+  date: string;
+  va_seconds: number;
+  nnva_seconds: number;
+  nva_seconds: number;
+  count: number;
+  va_ratio: number | null;
+}
+
+export interface NvaSummary {
+  range: { from: string; to: string; key: string };
+  filters: { camera_id: string; location: string };
+  thresholds: NvaThresholds;
+  observed_seconds: number;
+  observed_duration: string;
+  classified_seconds: number;
+  classified_duration: string;
+  tracks: number;
+  /** null rather than 0 when nothing was classified — an empty period has no ratio. */
+  va_ratio: number | null;
+  nnva_ratio: number | null;
+  nva_ratio: number | null;
+  va_seconds: number;
+  nnva_seconds: number;
+  nva_seconds: number;
+  value_split: NvaValueSplitRow[];
+  by_activity: NvaActivityRow[];
+  by_waste: NvaWasteRow[];
+  recommendations: NvaRecommendation[];
+  trend: NvaTrendPoint[];
+  by_camera: NvaGroupRow[];
+  by_location: NvaGroupRow[];
+  by_video: NvaGroupRow[];
+  recent_runs: AnalysisRun[];
+}
+
+export interface NvaSegment {
+  activity_id: string;
+  run_id: string;
+  camera_id: string;
+  camera_name: string;
+  location: string;
+  video_name: string;
+  track_id: number;
+  activity: string;
+  value_class: ValueClass;
+  waste: string;
+  start_time: string;
+  end_time: string;
+  duration_seconds: number;
+  duration: string;
+  confidence: number;
+  date: string;
+}
+
+export interface NvaSegmentPage {
+  items: NvaSegment[];
+  total: number;
+  limit: number;
+  offset: number;
 }

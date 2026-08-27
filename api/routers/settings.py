@@ -62,6 +62,32 @@ FIELD_GROUPS = [
         ],
     },
     {
+        "id": "nva",
+        "title": "NVA analysis",
+        "description": "How activity is classified as value-added or waste. "
+                       "Speeds are in body-heights per second, so one setting "
+                       "is correct at every distance from the camera.",
+        "fields": [
+            {"key": "NVA_ENABLED", "label": "NVA analysis", "type": "bool",
+             "help": "Classify what people are doing alongside the safety check."},
+            {"key": "NVA_IDLE_SPEED", "label": "Idle speed", "type": "ratio",
+             "min": 0.01, "max": 0.3, "step": 0.01,
+             "help": "Below this speed a person counts as stationary rather than working."},
+            {"key": "NVA_WALK_SPEED", "label": "Walking speed", "type": "ratio",
+             "min": 0.1, "max": 1.0, "step": 0.05,
+             "help": "At or above this speed a person is travelling, not working in place."},
+            {"key": "NVA_IDLE_MIN_SECONDS", "label": "Minimum idle", "type": "int",
+             "min": 1, "max": 120,
+             "help": "Seconds of standing still before it is charged to waiting."},
+            {"key": "NVA_MIN_SEGMENT_SECONDS", "label": "Minimum activity", "type": "int",
+             "min": 1, "max": 60,
+             "help": "Shorter runs of an activity are ignored as normal work rhythm."},
+            {"key": "NVA_TARGET_VA_RATIO", "label": "Value-added target", "type": "int",
+             "min": 0, "max": 100,
+             "help": "Percent of classified time the line is held to. Drives the headline recommendation."},
+        ],
+    },
+    {
         "id": "notifications",
         "title": "Notifications",
         "description": "Supervisor alerting for confirmed incidents.",

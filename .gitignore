@@ -1,5 +1,9 @@
 __pycache__/
-output/
+output/images/*.jpg
+output/logs/*.log
+output/posters/*.jpg
+output/reports/*.xlsx
+output/uploads/*.mp4
 *.png
 *.jpg
 *.jpeg
@@ -8,3 +12,9 @@ output/
 *.pyc
 models/*.pt
 node_modules/
+*.exe
+*cfg
+venv/
+*.whl
+*.zip
+*.md

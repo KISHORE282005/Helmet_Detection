@@ -235,41 +235,8 @@ export default function VideoAnalysis() {
             </Panel>
           ) : null}
 
-          {/* Progress / results */}
-          {shownJob && <JobPanel job={shownJob} onDismiss={() => setActiveJobId(null)} />}
-
-          {!shownJob && !upload && (
-            <Panel eyebrow="Pipeline" title="What happens when you start">
-              <ol className="flex flex-col gap-2.5">
-                {[
-                  ['Detection', 'YOLO11 finds every person in each analysed frame.'],
-                  ['Tracking', 'ByteTrack keeps one identity per person across frames.'],
-                  [
-                    'Violation',
-                    'A person must read as helmet-missing for a run of consecutive frames before anything is raised.',
-                  ],
-                  [
-                    'Incident',
-                    'That confirmed run becomes exactly one incident — repeats for the same track are suppressed.',
-                  ],
-                  [
-                    'Evidence',
-                    'The best frame of the run is saved, scored on subject size, sharpness and confidence.',
-                  ],
-                ].map(([title, detail], index) => (
-                  <li key={title} className="flex gap-3">
-                    <span className="tabular mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-line-strong bg-surface-2 text-[10px] font-semibold text-ink-2">
-                      {index + 1}
-                    </span>
-                    <div>
-                      <p className="text-xs font-medium text-ink">{title}</p>
-                      <p className="text-[11px] leading-relaxed text-ink-3">{detail}</p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </Panel>
-          )}
+        
+           
         </div>
 
         {/* History */}

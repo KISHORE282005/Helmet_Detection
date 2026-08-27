@@ -5,7 +5,7 @@ from datetime import date, datetime
 from fastapi import APIRouter
 
 from ..schemas import serialize_incident
-from ..services import analysis_manager
+from ..services import analysis_manager, live_manager
 from ..state import get_camera_monitor, get_config, get_db, system_state
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -39,6 +39,7 @@ def health():
         db_ok, db_detail = False, str(exc)
 
     active = analysis_manager.active_job()
+    live_cameras = live_manager.active_camera_ids()
     helmet_weights = cfg.HELMET_MODEL_PATH.exists()
 
     components = [
@@ -59,10 +60,11 @@ def health():
         ),
         _component(
             "RTSP Stream",
-            online > 0,
-            f"{online} live stream(s) reachable" if online
-            else "Not connected — Phase 1 analyses recorded footage",
-            degraded=online == 0 and configured > 0,
+            bool(live_cameras) or online > 0,
+            f"Analysing live: {', '.join(live_cameras)}" if live_cameras
+            else (f"{online} live stream(s) reachable — none being analysed" if online
+                  else "Not connected — no camera is streaming"),
+            degraded=not live_cameras and online == 0 and configured > 0,
         ),
         _component(
             "YOLO Model",
@@ -81,7 +83,8 @@ def health():
         _component(
             "Analysis Worker",
             True,
-            f"Running: {active.upload['filename']}" if active else "Idle",
+            f"Running: {active.upload['filename']}" if active
+            else (f"Live analysis on {len(live_cameras)} camera(s)" if live_cameras else "Idle"),
         ),
         _component(
             "Email Alerts",
@@ -93,7 +96,8 @@ def health():
 
     return {
         "phase": 1,
-        "mode": "recorded" if online == 0 else "live",
+        "mode": "live" if (live_cameras or online) else "recorded",
+        "live_camera_ids": live_cameras,
         "server_time": datetime.now().isoformat(timespec="seconds"),
         "uptime_seconds": int((datetime.now() - STARTED_AT).total_seconds()),
         "components": components,
