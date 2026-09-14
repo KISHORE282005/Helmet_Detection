@@ -64,7 +64,7 @@ export default function AIModels() {
       ) : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
           <div className="flex flex-col gap-4 xl:col-span-2">
-            <Panel eyebrow="Phase 1" title="Active detection stack" dense>
+            <Panel eyebrow="Detection" title="Active detection stack" dense>
               <ul className="divide-y divide-line">
                 {phase1.map((model) => (
                   <ModelRow key={model.role} model={model} />

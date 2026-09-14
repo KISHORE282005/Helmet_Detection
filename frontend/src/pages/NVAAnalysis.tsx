@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/layout/AppShell';
-import { BarList, TrendChart } from '../components/charts/charts';
+import { TrendChart } from '../components/charts/charts';
 import { NoDataValue, StatTile } from '../components/domain/StatTile';
 import {
   Badge,
@@ -22,10 +22,9 @@ import {
   cx,
   type Tone,
 } from '../components/ui/primitives';
-import { useNva, useNvaActivities, useNvaCatalog } from '../lib/hooks';
+import { useNva, useNvaCatalog } from '../lib/hooks';
 import { labelDay, percent, shortDate } from '../lib/format';
 import type {
-  NvaGroupRow,
   NvaRecommendation,
   NvaSummary,
   ValueClass,
@@ -53,8 +52,6 @@ export default function NVAAnalysis() {
   const [range, setRange] = useState('7d');
   const { data, isLoading, isError, error, refetch } = useNva({ range });
   const catalog = useNvaCatalog();
-  const segments = useNvaActivities({ range, value_class: 'NVA', limit: 12 });
-
   if (isError) {
     return (
       <>
@@ -374,17 +371,4 @@ function RecommendationCard({ action }: { action: NvaRecommendation }) {
   );
 }
 
-function GroupList({ rows, empty }: { rows: NvaGroupRow[]; empty: string }) {
-  if (rows.length === 0) return <EmptyState compact title={empty} />;
-  return (
-    <BarList
-      unit="NVA minutes"
-      data={rows.map((row) => ({
-        key: row.key || 'unassigned',
-        label: row.key || 'Unassigned',
-        count: row.count,
-        meta: `${row.duration} NVA · ${percent(row.nva_share)} of its tracked time`,
-      }))}
-    />
-  );
-}
+

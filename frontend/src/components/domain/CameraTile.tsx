@@ -113,7 +113,7 @@ export function CameraTile({
             <p className="max-w-[26ch] text-[10px] leading-relaxed text-ink-3">
               {offline
                 ? `Last reachable ${camera.last_seen ? relativeTime(camera.last_seen) : 'never'}.`
-                : 'Analyse recorded footage from this camera on the Video Analysis page.'}
+                : 'Analyse footage from this camera on the Video Analysis page.'}
             </p>
           </div>
         )}

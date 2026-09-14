@@ -3,8 +3,7 @@
  */
 
 import { NavLink } from 'react-router-dom';
-import { useHealth } from '../../lib/hooks';
-import { StatusDot, cx, type Tone } from '../ui/primitives';
+import { cx } from '../ui/primitives';
 
 interface NavItem {
   to: string;
@@ -31,7 +30,6 @@ export function Sidebar({
   collapsed?: boolean;
   onToggle?: () => void;
 }) {
-  const health = useHealth();
 
   const groups: NavGroup[] = [
     {
@@ -72,12 +70,8 @@ export function Sidebar({
     },
   ];
 
-  const statusTone = (status: string): Tone =>
-    status === 'online' ? 'good' : status === 'degraded' ? 'warning' : 'critical';
 
   // The three the operator is asked to trust at a glance.
-  const headline = ['AI Engine', 'Database', 'Camera Network'];
-  const summary = (health.data?.components ?? []).filter((c) => headline.includes(c.name));
 
   return (
     <aside

@@ -105,7 +105,32 @@ python -m api
 
 Open **http://127.0.0.1:8000**.
 
-For front-end development, run the API and the Vite dev server side by side:
+### Run frontend alone (after build)
+
+If the front end is already built (`dist/` exists), you can preview it standalone
+without the backend:
+
+```powershell
+cd frontend
+npm run preview
+```
+
+Opens at **http://localhost:4173**. Useful for checking the UI without starting the
+API. Note: data-dependent pages will show empty states until the backend is running.
+
+### Run frontend alone — development mode
+
+```powershell
+cd frontend
+npm run dev
+```
+
+Opens at **http://localhost:5173** with hot reload. The dev server proxies `/api`
+requests to `http://127.0.0.1:8000`, so the backend must be running for live data.
+
+### Side-by-side development
+
+Run the API and the Vite dev server in separate terminals:
 
 ```powershell
 python -m api --reload         # terminal 1  → http://127.0.0.1:8000

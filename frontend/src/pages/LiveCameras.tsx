@@ -103,7 +103,7 @@ export function LiveCameras({ wall = false }: { wall?: boolean }) {
         <p className="mb-3 text-[11px] text-ink-3">
           Reachability checked {relativeTime(data.last_poll)}, automatically every{' '}
           {data.poll_interval_seconds}s. A camera is reported online when its RTSP port
-          accepts a connection — Phase 1 does not decode the stream itself.
+          accepts a connection — it does not decode the stream itself.
         </p>
       )}
 

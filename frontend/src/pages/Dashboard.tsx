@@ -6,10 +6,8 @@ import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/layout/AppShell';
 import { StatTile, NoDataValue } from '../components/domain/StatTile';
 import { CameraTile, OfflineCameraAlert } from '../components/domain/CameraTile';
-import { IncidentRow } from '../components/domain/IncidentCard';
-import { BarList, TrendChart } from '../components/charts/charts';
+import { TrendChart } from '../components/charts/charts';
 import {
-  AlertIcon,
   Button,
   CameraIcon,
   EmptyState,
@@ -17,16 +15,14 @@ import {
   Panel,
   RefreshIcon,
   Skeleton,
-  StatusDot,
   cx,
 } from '../components/ui/primitives';
-import { useCameraMutations, useDashboard, useHealth } from '../lib/hooks';
-import { clockTime, labelDay, padded, percent, relativeTime } from '../lib/format';
+import { useCameraMutations, useDashboard } from '../lib/hooks';
+import { labelDay, padded, percent, relativeTime } from '../lib/format';
 import type { Incident } from '../lib/types';
 
 export default function Dashboard() {
   const { data, isLoading, isError, error, refetch } = useDashboard();
-  const health = useHealth();
   const { refresh } = useCameraMutations();
 
   if (isError) {

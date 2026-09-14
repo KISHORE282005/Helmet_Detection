@@ -55,7 +55,7 @@ def health():
             "Camera Network",
             configured == 0 or online > 0,
             f"{online}/{configured} configured cameras reachable" if configured
-            else "No camera IPs configured — Phase 1 runs on recorded video",
+            else "No camera IPs configured",
             degraded=configured > 0 and online < configured,
         ),
         _component(

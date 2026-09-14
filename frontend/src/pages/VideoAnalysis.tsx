@@ -1,4 +1,4 @@
-/** Phase 1 input: analyse recorded CCTV footage.
+/** Analyse uploaded CCTV footage.
  *
  *  Every counter on this page comes from the running pipeline. Before a job
  *  starts there is nothing to show, and the page says so rather than
@@ -6,10 +6,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/layout/AppShell';
-import { SuppressionMeter } from '../components/charts/charts';
-import { EvidenceThumb } from '../components/domain/IncidentCard';
 import {
   AlertIcon,
   Badge,
@@ -28,9 +25,8 @@ import {
   useAnalysisJob,
   useAnalysisJobs,
   useCameras,
-  useIncidents,
 } from '../lib/hooks';
-import { bytes, duration, padded, relativeTime } from '../lib/format';
+import { bytes, duration, relativeTime } from '../lib/format';
 import type { AnalysisJob, Upload } from '../lib/types';
 
 const ACCEPT = '.mp4,.avi,.mov,.mkv,.webm';
@@ -98,8 +94,8 @@ export default function VideoAnalysis() {
   return (
     <>
       <PageHeader
-        title="Analyse Recorded Video"
-        subtitle="Phase 1 input — the same pipeline that will run on live Hikvision streams in Phase 2"
+        title="Analyse Video"
+        subtitle="Run the detection pipeline over uploaded CCTV footage"
         actions={
           shownJob && (
             <Badge
@@ -304,269 +300,11 @@ export default function VideoAnalysis() {
   );
 }
 
-/* ------------------------------------------------------------- Job panel */
-
-function JobPanel({ job, onDismiss }: { job: AnalysisJob; onDismiss: () => void }) {
-  const running = job.status === 'running' || job.status === 'queued';
-  const progress = job.progress;
-
-  if (job.status === 'failed') {
-    return (
-      <Panel eyebrow="Analysis" title="Analysis failed">
-        <EmptyState
-          icon={<AlertIcon className="h-6 w-6 text-critical" />}
-          title={job.video.filename}
-          description={job.error ?? 'The pipeline stopped with an unexpected error.'}
-          action={
-            <Button size="sm" onClick={onDismiss}>
-              Dismiss
-            </Button>
-          }
-        />
-      </Panel>
-    );
-  }
-
-  if (running) {
-    return (
-      <Panel
-        eyebrow="Step 2"
-        title="AI analysis in progress"
-        action={
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={() => void api.post(`/api/analysis/${job.job_id}/cancel`)}
-          >
-            Stop
-          </Button>
-        }
-      >
-        <div className="mb-1 flex items-baseline justify-between gap-3">
-          <p className="truncate text-xs font-medium text-ink">{job.video.filename}</p>
-          <span className="tabular text-sm font-semibold text-ink">
-            {Math.round(progress.progress * 100)}%
-          </span>
-        </div>
-        <ProgressBar
-          value={progress.progress}
-          indeterminate={job.status === 'queued'}
-          className="h-2"
-        />
-        <p className="tabular mt-1.5 text-[11px] text-ink-3">
-          {job.status === 'queued'
-            ? 'Queued — waiting for the analysis worker'
-            : `${progress.frames_read.toLocaleString('en-US')} / ${progress.frames_total.toLocaleString('en-US')} frames · ${progress.processing_fps.toFixed(1)} FPS processing · ${duration(progress.elapsed_seconds)} elapsed`}
-        </p>
-
-        <div className="mt-4 grid grid-cols-2 gap-3 border-t border-line pt-3 sm:grid-cols-4">
-          <LiveStat label="Frames analysed" value={progress.frames_analyzed.toLocaleString('en-US')} />
-          <LiveStat label="People tracked" value={String(progress.people_detected)} />
-          <LiveStat
-            label="Raw detections"
-            value={String(progress.raw_detections)}
-            hint="helmet-missing person-frames"
-          />
-          <LiveStat
-            label="Unique incidents"
-            value={padded(progress.incidents)}
-            tone="critical"
-            hint="one per tracked person"
-          />
-        </div>
-      </Panel>
-    );
-  }
-
-  const result = job.result;
-  if (!result) {
-    return (
-      <Panel eyebrow="Analysis" title={`Analysis ${job.status}`}>
-        <EmptyState
-          compact
-          title={job.video.filename}
-          description="The run ended before it produced a result."
-          action={
-            <Button size="sm" onClick={onDismiss}>
-              Dismiss
-            </Button>
-          }
-        />
-      </Panel>
-    );
-  }
-
-  return <ResultPanel job={job} onDismiss={onDismiss} />;
-}
-
-function ResultPanel({ job, onDismiss }: { job: AnalysisJob; onDismiss: () => void }) {
-  const result = job.result!;
-  const incidents = useIncidents({ analysis_id: job.job_id, limit: 12 });
-
-  return (
-    <>
-      <Panel
-        eyebrow="Step 3"
-        title={
-          <span className="flex items-center gap-2">
-            Analysis complete
-            <CheckIcon className="h-4 w-4 text-good" />
-          </span>
-        }
-        action={
-          <Button size="sm" onClick={onDismiss}>
-            Dismiss
-          </Button>
-        }
-      >
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <p className="truncate text-sm font-medium text-ink">{job.video.filename}</p>
-          <p className="tabular text-[11px] text-ink-3">
-            {duration(result.elapsed_seconds)} runtime · {result.processing_fps.toFixed(1)} FPS ·
-            frame skip {result.frame_skip}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-          <ResultStat label="Duration" value={duration(job.video.duration_seconds)} />
-          <ResultStat
-            label="Frames analysed"
-            value={result.frames_analyzed.toLocaleString('en-US')}
-          />
-          <ResultStat label="People detected" value={String(result.people_detected)} />
-          <ResultStat
-            label="Raw detections"
-            value={String(result.raw_detections)}
-          />
-          <ResultStat
-            label="Unique incidents"
-            value={padded(result.unique_incidents)}
-            tone="critical"
-          />
-          <ResultStat
-            label="Compliant frames"
-            value={result.compliant_frames.toLocaleString('en-US')}
-            tone="good"
-          />
-        </div>
-      </Panel>
-
-      <Panel
-        eyebrow="Duplicate suppression"
-        title="Raw detections vs unique incidents"
-      >
-        <SuppressionMeter raw={result.raw_detections} unique={result.unique_incidents} />
-        <p className="mt-3 border-t border-line pt-2.5 text-[11px] leading-relaxed text-ink-3">
-          The pipeline saw{' '}
-          <strong className="text-ink-2">
-            {result.raw_detections.toLocaleString('en-US')}
-          </strong>{' '}
-          helmet-missing person-frames and recorded{' '}
-          <strong className="text-ink-2">{result.unique_incidents}</strong> incident
-          {result.unique_incidents === 1 ? '' : 's'}. The difference is the same people
-          seen again across frames — collapsed by track identity so one worker never
-          generates hundreds of records.
-        </p>
-      </Panel>
-
-      {(incidents.data?.items.length ?? 0) > 0 && (
-        <Panel
-          eyebrow="Output"
-          title={`Incidents from this run (${incidents.data?.total ?? 0})`}
-          action={
-            <Link to={`/incidents?analysis=${job.job_id}`}>
-              <Button size="sm" variant="ghost">
-                Open in history
-              </Button>
-            </Link>
-          }
-        >
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6">
-            {incidents.data?.items.map((incident) => (
-              <Link
-                key={incident.incident_id}
-                to={`/incidents/${incident.incident_id}`}
-                className="group"
-              >
-                <EvidenceThumb
-                  incident={incident}
-                  className="aspect-video w-full transition-opacity group-hover:opacity-80"
-                />
-                <p className="tabular mt-1 truncate text-[10px] font-medium text-ink">
-                  {incident.incident_id}
-                </p>
-                <p className="tabular truncate text-[10px] text-ink-3">
-                  {incident.video_time} · track #{incident.track_id}
-                </p>
-              </Link>
-            ))}
-          </div>
-        </Panel>
-      )}
-    </>
-  );
-}
-
-/* ----------------------------------------------------------------- Bits */
-
 function Meta({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <dt className="eyebrow truncate">{label}</dt>
       <dd className="tabular truncate text-xs font-medium text-ink">{value}</dd>
-    </div>
-  );
-}
-
-function LiveStat({
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  tone?: 'critical';
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="eyebrow truncate">{label}</div>
-      <div
-        className={cx(
-          'tabular mt-0.5 text-xl font-semibold',
-          tone === 'critical' ? 'text-critical' : 'text-ink',
-        )}
-      >
-        {value}
-      </div>
-      {hint && <div className="truncate text-[10px] text-ink-3">{hint}</div>}
-    </div>
-  );
-}
-
-function ResultStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: 'critical' | 'good';
-}) {
-  return (
-    <div className="min-w-0 rounded border border-line bg-surface-2 p-2.5">
-      <div className="eyebrow truncate">{label}</div>
-      <div
-        className={cx(
-          'tabular mt-1 text-lg font-semibold',
-          tone === 'critical' && 'text-critical',
-          tone === 'good' && 'text-good',
-          !tone && 'text-ink',
-        )}
-      >
-        {value}
-      </div>
     </div>
   );
 }
